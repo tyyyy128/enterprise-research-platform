@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from enterprise_research.domain import (
     ResearchAggregate,
     ResearchTaskStatus,
+    Source,
+    SourceType,
 )
 
 
@@ -53,4 +56,40 @@ class ResearchTaskResponse(BaseModel):
             evidence_count=len(aggregate.evidence),
             claim_count=len(aggregate.claims),
             report_id=task.report_id,
+        )
+
+
+class CreateSourceRequest(BaseModel):
+    """Request for adding a source to a research task."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    source_type: SourceType
+    title: str = Field(min_length=1, max_length=1000)
+    url: HttpUrl | None = None
+    content_hash: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceResponse(BaseModel):
+    """Stable API representation of a research source."""
+
+    source_id: UUID
+    source_type: SourceType
+    title: str
+    url: HttpUrl | None
+    retrieved_at: datetime
+    content_hash: str | None
+    metadata: dict[str, Any]
+
+    @classmethod
+    def from_domain(cls, source: Source) -> SourceResponse:
+        return cls(
+            source_id=source.source_id,
+            source_type=source.source_type,
+            title=source.title,
+            url=source.url,
+            retrieved_at=source.retrieved_at,
+            content_hash=source.content_hash,
+            metadata=source.metadata,
         )

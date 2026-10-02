@@ -10,12 +10,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from enterprise_research.api import (
     CreateResearchTaskRequest,
+    CreateSourceRequest,
     ResearchTaskResponse,
+    SourceResponse,
 )
 from enterprise_research.application import (
     ResearchApplicationService,
     ResearchTaskNotFoundError,
 )
+from enterprise_research.domain import Source
 from enterprise_research.infrastructure import (
     InMemoryResearchRepository,
 )
@@ -118,5 +121,36 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
             ) from exc
 
         return ResearchTaskResponse.from_aggregate(aggregate)
+
+    @router.post(
+        "/tasks/{task_id}/sources",
+        response_model=SourceResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def add_source(
+        task_id: UUID,
+        request: CreateSourceRequest,
+        application: ResearchApplicationService = Depends(service.require_application),
+    ) -> SourceResponse:
+        source = Source(
+            source_type=request.source_type,
+            title=request.title,
+            url=request.url,
+            content_hash=request.content_hash,
+            metadata=request.metadata,
+        )
+
+        try:
+            created = await application.add_source(
+                task_id,
+                source,
+            )
+        except ResearchTaskNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return SourceResponse.from_domain(created)
 
     return router
