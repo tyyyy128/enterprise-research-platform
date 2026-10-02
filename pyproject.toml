@@ -24,8 +24,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/enterprise_research"]
-[tool.uv.sources]
-deerflow-extension-api = { path = "../deer-flow/backend/packages/extension-api", editable = true }
 
 [tool.ruff]
 line-length = 120
