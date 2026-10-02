@@ -15,10 +15,14 @@ from enterprise_research.infrastructure.postgres.models import (
     ResearchSourceRow,
     ResearchTaskRow,
 )
+from enterprise_research.infrastructure.postgres.repository import (
+    PostgresResearchRepository,
+)
 
 __all__ = [
     "Base",
     "ClaimEvidenceRow",
+    "PostgresResearchRepository",
     "PostgresSettings",
     "ReportClaimRow",
     "ResearchClaimRow",
