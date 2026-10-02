@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from enterprise_research.domain import (
+    Evidence,
     ResearchAggregate,
     ResearchTaskStatus,
     Source,
@@ -92,4 +93,41 @@ class SourceResponse(BaseModel):
             retrieved_at=source.retrieved_at,
             content_hash=source.content_hash,
             metadata=source.metadata,
+        )
+
+
+class CreateEvidenceRequest(BaseModel):
+    """Request for adding evidence extracted from a source."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    source_id: UUID
+    content: str = Field(min_length=1, max_length=100000)
+    locator: str | None = Field(default=None, max_length=2000)
+    relevance_score: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+    )
+
+
+class EvidenceResponse(BaseModel):
+    """Stable API representation of research evidence."""
+
+    evidence_id: UUID
+    source_id: UUID
+    content: str
+    locator: str | None
+    relevance_score: float
+    created_at: datetime
+
+    @classmethod
+    def from_domain(cls, evidence: Evidence) -> EvidenceResponse:
+        return cls(
+            evidence_id=evidence.evidence_id,
+            source_id=evidence.source_id,
+            content=evidence.content,
+            locator=evidence.locator,
+            relevance_score=evidence.relevance_score,
+            created_at=evidence.created_at,
         )

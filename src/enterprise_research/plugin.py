@@ -9,8 +9,10 @@ from deerflow_extension_api import ExtensionRuntimeDeps
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from enterprise_research.api import (
+    CreateEvidenceRequest,
     CreateResearchTaskRequest,
     CreateSourceRequest,
+    EvidenceResponse,
     ResearchTaskResponse,
     SourceResponse,
 )
@@ -18,7 +20,11 @@ from enterprise_research.application import (
     ResearchApplicationService,
     ResearchTaskNotFoundError,
 )
-from enterprise_research.domain import Source
+from enterprise_research.domain import (
+    Evidence,
+    Source,
+    UnknownSourceError,
+)
 from enterprise_research.infrastructure import (
     InMemoryResearchRepository,
 )
@@ -152,5 +158,40 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
             ) from exc
 
         return SourceResponse.from_domain(created)
+
+    @router.post(
+        "/tasks/{task_id}/evidence",
+        response_model=EvidenceResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def add_evidence(
+        task_id: UUID,
+        request: CreateEvidenceRequest,
+        application: ResearchApplicationService = Depends(service.require_application),
+    ) -> EvidenceResponse:
+        evidence = Evidence(
+            source_id=request.source_id,
+            content=request.content,
+            locator=request.locator,
+            relevance_score=request.relevance_score,
+        )
+
+        try:
+            created = await application.add_evidence(
+                task_id,
+                evidence,
+            )
+        except ResearchTaskNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except UnknownSourceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return EvidenceResponse.from_domain(created)
 
     return router
