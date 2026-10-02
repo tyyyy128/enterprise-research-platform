@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "deerflow-extension-api>=0.2,<0.3",
     "fastapi>=0.115,<1",
+    "pydantic>=2.13,<3",
 ]
 
 [project.entry-points."deerflow.extensions"]
