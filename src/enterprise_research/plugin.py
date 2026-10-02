@@ -3,9 +3,22 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from deerflow_extension_api import ExtensionRuntimeDeps
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from enterprise_research.api import (
+    CreateResearchTaskRequest,
+    ResearchTaskResponse,
+)
+from enterprise_research.application import (
+    ResearchApplicationService,
+    ResearchTaskNotFoundError,
+)
+from enterprise_research.infrastructure import (
+    InMemoryResearchRepository,
+)
 
 
 class EnterpriseResearchService:
@@ -13,26 +26,45 @@ class EnterpriseResearchService:
 
     def __init__(self) -> None:
         self._deps: ExtensionRuntimeDeps | None = None
+        self._application: ResearchApplicationService | None = None
 
     async def start(self, deps: ExtensionRuntimeDeps) -> None:
-        """Called when the DeerFlow Gateway starts the extension."""
+        """Start runtime resources."""
         self._deps = deps
 
+        repository = InMemoryResearchRepository()
+        self._application = ResearchApplicationService(repository)
+
     async def stop(self) -> None:
-        """Called when the DeerFlow Gateway stops the extension."""
+        """Release runtime resources."""
+        self._application = None
         self._deps = None
 
     async def require_deps(self) -> ExtensionRuntimeDeps:
-        """Return runtime dependencies only while the service is running."""
+        """Return DeerFlow runtime dependencies."""
         deps = self._deps
 
         if deps is None or deps.app_store is None:
             raise HTTPException(
-                status_code=503,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="enterprise-research extension is not running",
             )
 
         return deps
+
+    async def require_application(
+        self,
+    ) -> ResearchApplicationService:
+        """Return the application service while runtime is active."""
+        application = self._application
+
+        if application is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="enterprise-research extension is not running",
+            )
+
+        return application
 
 
 def build_router(service: EnterpriseResearchService) -> APIRouter:
@@ -55,5 +87,36 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
             "scope_id": deps.app_store.scope_id,
             "session_factory_available": deps.session_factory is not None,
         }
+
+    @router.post(
+        "/tasks",
+        response_model=ResearchTaskResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_task(
+        request: CreateResearchTaskRequest,
+        application: ResearchApplicationService = Depends(service.require_application),
+    ) -> ResearchTaskResponse:
+        aggregate = await application.create_task(request.query)
+
+        return ResearchTaskResponse.from_aggregate(aggregate)
+
+    @router.get(
+        "/tasks/{task_id}",
+        response_model=ResearchTaskResponse,
+    )
+    async def get_task(
+        task_id: UUID,
+        application: ResearchApplicationService = Depends(service.require_application),
+    ) -> ResearchTaskResponse:
+        try:
+            aggregate = await application.get_task(task_id)
+        except ResearchTaskNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return ResearchTaskResponse.from_aggregate(aggregate)
 
     return router

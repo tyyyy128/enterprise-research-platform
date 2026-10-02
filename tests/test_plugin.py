@@ -34,10 +34,11 @@ def test_install_registers_service_and_router() -> None:
     assert len(registry.services) == 1
     assert len(registry.contributed_routers) == 1
 
-    routes = registry.contributed_routers[0].routes
-    assert [route.path for route in routes] == [
+    assert {route.path for route in registry.contributed_routers[0].routes} == {
         "/api/enterprise-research/health",
-    ]
+        "/api/enterprise-research/tasks",
+        "/api/enterprise-research/tasks/{task_id}",
+    }
 
     assert install.__deerflow_api__ == "0.2.0"
     assert install.__deerflow_name__ == "enterprise-research"
