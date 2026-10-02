@@ -13,9 +13,11 @@ from enterprise_research.api import (
     ClaimResponse,
     CreateClaimRequest,
     CreateEvidenceRequest,
+    CreateReportRequest,
     CreateResearchTaskRequest,
     CreateSourceRequest,
     EvidenceResponse,
+    ResearchReportResponse,
     ResearchTaskResponse,
     SourceResponse,
     SupportClaimRequest,
@@ -27,6 +29,7 @@ from enterprise_research.application import (
 from enterprise_research.domain import (
     Claim,
     Evidence,
+    InvalidReportError,
     Source,
     UnknownClaimError,
     UnknownEvidenceError,
@@ -308,5 +311,40 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
             claim_id,
             lineage,
         )
+
+    @router.post(
+        "/tasks/{task_id}/report",
+        response_model=ResearchReportResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def build_report(
+        task_id: UUID,
+        request: CreateReportRequest,
+        application: ResearchApplicationService = Depends(service.require_application),
+    ) -> ResearchReportResponse:
+        try:
+            report = await application.build_report(
+                task_id,
+                title=request.title,
+                summary=request.summary,
+                claim_ids=request.claim_ids,
+            )
+        except ResearchTaskNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except UnknownClaimError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except InvalidReportError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+        return ResearchReportResponse.from_domain(report)
 
     return router

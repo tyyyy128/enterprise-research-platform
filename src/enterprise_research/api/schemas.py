@@ -13,6 +13,7 @@ from enterprise_research.domain import (
     ClaimStatus,
     Evidence,
     ResearchAggregate,
+    ResearchReport,
     ResearchTaskStatus,
     Source,
     SourceType,
@@ -199,4 +200,39 @@ class ClaimLineageResponse(BaseModel):
                 )
                 for evidence, source in lineage
             ],
+        )
+
+
+class CreateReportRequest(BaseModel):
+    """Request for generating a research report."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=1000)
+    summary: str = Field(default="", max_length=50000)
+    claim_ids: list[UUID] | None = None
+
+
+class ResearchReportResponse(BaseModel):
+    """Stable API representation of a research report."""
+
+    report_id: UUID
+    task_id: UUID
+    title: str
+    summary: str
+    claim_ids: list[UUID]
+    generated_at: datetime
+
+    @classmethod
+    def from_domain(
+        cls,
+        report: ResearchReport,
+    ) -> ResearchReportResponse:
+        return cls(
+            report_id=report.report_id,
+            task_id=report.task_id,
+            title=report.title,
+            summary=report.summary,
+            claim_ids=report.claim_ids,
+            generated_at=report.generated_at,
         )
