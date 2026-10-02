@@ -9,6 +9,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from enterprise_research.domain import (
+    Claim,
+    ClaimStatus,
     Evidence,
     ResearchAggregate,
     ResearchTaskStatus,
@@ -130,4 +132,71 @@ class EvidenceResponse(BaseModel):
             locator=evidence.locator,
             relevance_score=evidence.relevance_score,
             created_at=evidence.created_at,
+        )
+
+
+class CreateClaimRequest(BaseModel):
+    """Request for creating an unverified research claim."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    text: str = Field(min_length=1, max_length=10000)
+    evidence_ids: list[UUID] = Field(default_factory=list)
+
+
+class SupportClaimRequest(BaseModel):
+    """Request for supporting a claim with evidence."""
+
+    evidence_ids: list[UUID] = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ClaimResponse(BaseModel):
+    """Stable API representation of a research claim."""
+
+    claim_id: UUID
+    text: str
+    status: ClaimStatus
+    evidence_ids: list[UUID]
+    confidence: float
+
+    @classmethod
+    def from_domain(cls, claim: Claim) -> ClaimResponse:
+        return cls(
+            claim_id=claim.claim_id,
+            text=claim.text,
+            status=claim.status,
+            evidence_ids=claim.evidence_ids,
+            confidence=claim.confidence,
+        )
+
+
+class EvidenceLineageItemResponse(BaseModel):
+    """One evidence-to-source link in claim lineage."""
+
+    evidence: EvidenceResponse
+    source: SourceResponse
+
+
+class ClaimLineageResponse(BaseModel):
+    """Trace a claim back to evidence and original sources."""
+
+    claim_id: UUID
+    items: list[EvidenceLineageItemResponse]
+
+    @classmethod
+    def from_domain(
+        cls,
+        claim_id: UUID,
+        lineage: list[tuple[Evidence, Source]],
+    ) -> ClaimLineageResponse:
+        return cls(
+            claim_id=claim_id,
+            items=[
+                EvidenceLineageItemResponse(
+                    evidence=EvidenceResponse.from_domain(evidence),
+                    source=SourceResponse.from_domain(source),
+                )
+                for evidence, source in lineage
+            ],
         )

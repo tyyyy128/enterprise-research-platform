@@ -9,20 +9,27 @@ from deerflow_extension_api import ExtensionRuntimeDeps
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from enterprise_research.api import (
+    ClaimLineageResponse,
+    ClaimResponse,
+    CreateClaimRequest,
     CreateEvidenceRequest,
     CreateResearchTaskRequest,
     CreateSourceRequest,
     EvidenceResponse,
     ResearchTaskResponse,
     SourceResponse,
+    SupportClaimRequest,
 )
 from enterprise_research.application import (
     ResearchApplicationService,
     ResearchTaskNotFoundError,
 )
 from enterprise_research.domain import (
+    Claim,
     Evidence,
     Source,
+    UnknownClaimError,
+    UnknownEvidenceError,
     UnknownSourceError,
 )
 from enterprise_research.infrastructure import (
@@ -193,5 +200,113 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
             ) from exc
 
         return EvidenceResponse.from_domain(created)
+
+    @router.post(
+        "/tasks/{task_id}/claims",
+        response_model=ClaimResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def add_claim(
+        task_id: UUID,
+        request: CreateClaimRequest,
+        application: ResearchApplicationService = Depends(service.require_application),
+    ) -> ClaimResponse:
+        claim = Claim(
+            text=request.text,
+            evidence_ids=request.evidence_ids,
+        )
+
+        try:
+            created = await application.add_claim(
+                task_id,
+                claim,
+            )
+        except ResearchTaskNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except UnknownEvidenceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return ClaimResponse.from_domain(created)
+
+    @router.post(
+        "/tasks/{task_id}/claims/{claim_id}/support",
+        response_model=ClaimResponse,
+    )
+    async def support_claim(
+        task_id: UUID,
+        claim_id: UUID,
+        request: SupportClaimRequest,
+        application: ResearchApplicationService = Depends(service.require_application),
+    ) -> ClaimResponse:
+        try:
+            claim = await application.support_claim(
+                task_id,
+                claim_id,
+                request.evidence_ids,
+                confidence=request.confidence,
+            )
+        except ResearchTaskNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except UnknownClaimError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except UnknownEvidenceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return ClaimResponse.from_domain(claim)
+
+    @router.get(
+        "/tasks/{task_id}/claims/{claim_id}/lineage",
+        response_model=ClaimLineageResponse,
+    )
+    async def trace_claim(
+        task_id: UUID,
+        claim_id: UUID,
+        application: ResearchApplicationService = Depends(service.require_application),
+    ) -> ClaimLineageResponse:
+        try:
+            lineage = await application.trace_claim(
+                task_id,
+                claim_id,
+            )
+        except ResearchTaskNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except UnknownClaimError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except UnknownEvidenceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except UnknownSourceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return ClaimLineageResponse.from_domain(
+            claim_id,
+            lineage,
+        )
 
     return router
