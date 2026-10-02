@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from uuid import UUID
 
 from deerflow_extension_api import ExtensionRuntimeDeps
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from enterprise_research.api import (
     ClaimLineageResponse,
@@ -38,6 +41,12 @@ from enterprise_research.domain import (
 from enterprise_research.infrastructure import (
     InMemoryResearchRepository,
 )
+from enterprise_research.infrastructure.postgres import (
+    PostgresResearchRepository,
+    PostgresSettings,
+    build_async_engine,
+    build_session_factory,
+)
 
 
 class EnterpriseResearchService:
@@ -46,17 +55,79 @@ class EnterpriseResearchService:
     def __init__(self) -> None:
         self._deps: ExtensionRuntimeDeps | None = None
         self._application: ResearchApplicationService | None = None
+        self._engine: AsyncEngine | None = None
 
     async def start(self, deps: ExtensionRuntimeDeps) -> None:
         """Start runtime resources."""
         self._deps = deps
 
-        repository = InMemoryResearchRepository()
+        repository_backend = (
+            os.getenv(
+                "ENTERPRISE_RESEARCH_REPOSITORY",
+                "memory",
+            )
+            .strip()
+            .lower()
+        )
+
+        if repository_backend == "memory":
+            repository = InMemoryResearchRepository()
+
+        elif repository_backend == "postgres":
+            try:
+                repository = await self._build_postgres_repository()
+            except Exception:
+                self._deps = None
+                raise
+
+        else:
+            self._deps = None
+
+            raise RuntimeError(
+                f"Unsupported Enterprise Research repository: {repository_backend!r}. Expected 'memory' or 'postgres'."
+            )
+
         self._application = ResearchApplicationService(repository)
+
+    async def _build_postgres_repository(
+        self,
+    ) -> PostgresResearchRepository:
+        """Build and verify the PostgreSQL repository."""
+        settings = PostgresSettings.from_env()
+        engine = build_async_engine(settings)
+
+        try:
+            async with engine.connect() as connection:
+                research_tasks_table = await connection.scalar(
+                    text(
+                        """
+                        SELECT to_regclass(
+                            'public.research_tasks'
+                        )
+                        """
+                    )
+                )
+
+                if research_tasks_table is None:
+                    raise RuntimeError(
+                        "Enterprise Research PostgreSQL schema is not initialized. Run 'alembic upgrade head' first."
+                    )
+        except Exception:
+            await engine.dispose()
+            raise
+
+        self._engine = engine
+
+        return PostgresResearchRepository(build_session_factory(engine))
 
     async def stop(self) -> None:
         """Release runtime resources."""
         self._application = None
+
+        if self._engine is not None:
+            await self._engine.dispose()
+            self._engine = None
+
         self._deps = None
 
     async def require_deps(self) -> ExtensionRuntimeDeps:
@@ -254,17 +325,11 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
                 request.evidence_ids,
                 confidence=request.confidence,
             )
-        except ResearchTaskNotFoundError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except UnknownClaimError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except UnknownEvidenceError as exc:
+        except (
+            ResearchTaskNotFoundError,
+            UnknownClaimError,
+            UnknownEvidenceError,
+        ) as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(exc),
@@ -286,22 +351,12 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
                 task_id,
                 claim_id,
             )
-        except ResearchTaskNotFoundError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except UnknownClaimError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except UnknownEvidenceError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=str(exc),
-            ) from exc
-        except UnknownSourceError as exc:
+        except (
+            ResearchTaskNotFoundError,
+            UnknownClaimError,
+            UnknownEvidenceError,
+            UnknownSourceError,
+        ) as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(exc),
