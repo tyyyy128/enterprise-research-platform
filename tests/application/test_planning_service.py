@@ -1,0 +1,266 @@
+from __future__ import annotations
+
+import asyncio
+from uuid import UUID, uuid4
+
+import pytest
+
+from enterprise_research.application import (
+    ResearchApplicationService,
+    ResearchPlanningError,
+    ResearchPlanningService,
+    ResearchRunApplicationService,
+    ResearchRunNotFoundError,
+    ResearchTaskNotFoundError,
+)
+from enterprise_research.domain import (
+    ResearchPlan,
+    ResearchQuestion,
+    ResearchRun,
+    ResearchRunStatus,
+    ResearchTask,
+)
+from enterprise_research.infrastructure import (
+    InMemoryResearchRepository,
+    InMemoryResearchRunRepository,
+)
+
+
+class RecordingPlanner:
+    """Deterministic planner used by application tests."""
+
+    def __init__(
+        self,
+        *,
+        wrong_task: bool = False,
+        wrong_run: bool = False,
+    ) -> None:
+        self.calls: list[tuple[UUID, UUID, str]] = []
+
+        self._wrong_task = wrong_task
+        self._wrong_run = wrong_run
+
+    async def plan(
+        self,
+        *,
+        task: ResearchTask,
+        run: ResearchRun,
+    ) -> ResearchPlan:
+        self.calls.append(
+            (
+                task.task_id,
+                run.run_id,
+                task.query,
+            )
+        )
+
+        return ResearchPlan(
+            task_id=(uuid4() if self._wrong_task else task.task_id),
+            run_id=(uuid4() if self._wrong_run else run.run_id),
+            objective=f"Research {task.query}",
+            questions=[
+                ResearchQuestion(
+                    question=(f"What primary evidence addresses {task.query}?"),
+                    rationale=("Establish an evidence-backed answer."),
+                )
+            ],
+        )
+
+
+def create_services(
+    planner: RecordingPlanner | None = None,
+) -> tuple[
+    ResearchApplicationService,
+    ResearchRunApplicationService,
+    ResearchPlanningService,
+    RecordingPlanner,
+]:
+    research_repository = InMemoryResearchRepository()
+    run_repository = InMemoryResearchRunRepository()
+
+    planner = planner or RecordingPlanner()
+
+    return (
+        ResearchApplicationService(research_repository),
+        ResearchRunApplicationService(
+            research_repository,
+            run_repository,
+        ),
+        ResearchPlanningService(
+            research_repository,
+            run_repository,
+            planner,
+        ),
+        planner,
+    )
+
+
+def test_create_plan_calls_planner_for_planning_run() -> None:
+    async def run() -> None:
+        (
+            application,
+            run_application,
+            planning_service,
+            planner,
+        ) = create_services()
+
+        aggregate = await application.create_task("LangGraph durable execution")
+
+        research_run = await run_application.create_run(aggregate.task.task_id)
+
+        await run_application.advance_run(
+            aggregate.task.task_id,
+            research_run.run_id,
+            ResearchRunStatus.PLANNING,
+        )
+
+        plan = await planning_service.create_plan(
+            aggregate.task.task_id,
+            research_run.run_id,
+        )
+
+        assert plan.task_id == aggregate.task.task_id
+        assert plan.run_id == research_run.run_id
+
+        assert planner.calls == [
+            (
+                aggregate.task.task_id,
+                research_run.run_id,
+                aggregate.task.query,
+            )
+        ]
+
+    asyncio.run(run())
+
+
+def test_create_plan_requires_existing_task() -> None:
+    async def run() -> None:
+        (
+            _,
+            _,
+            planning_service,
+            _,
+        ) = create_services()
+
+        with pytest.raises(
+            ResearchTaskNotFoundError,
+        ):
+            await planning_service.create_plan(
+                uuid4(),
+                uuid4(),
+            )
+
+    asyncio.run(run())
+
+
+def test_create_plan_requires_existing_run() -> None:
+    async def run() -> None:
+        (
+            application,
+            _,
+            planning_service,
+            _,
+        ) = create_services()
+
+        aggregate = await application.create_task("Research durable execution")
+
+        with pytest.raises(
+            ResearchRunNotFoundError,
+        ):
+            await planning_service.create_plan(
+                aggregate.task.task_id,
+                uuid4(),
+            )
+
+    asyncio.run(run())
+
+
+def test_create_plan_rejects_run_from_another_task() -> None:
+    async def run() -> None:
+        (
+            application,
+            run_application,
+            planning_service,
+            _,
+        ) = create_services()
+
+        first = await application.create_task("First research task")
+        second = await application.create_task("Second research task")
+
+        research_run = await run_application.create_run(first.task.task_id)
+
+        await run_application.advance_run(
+            first.task.task_id,
+            research_run.run_id,
+            ResearchRunStatus.PLANNING,
+        )
+
+        with pytest.raises(
+            ResearchRunNotFoundError,
+        ):
+            await planning_service.create_plan(
+                second.task.task_id,
+                research_run.run_id,
+            )
+
+    asyncio.run(run())
+
+
+def test_create_plan_requires_planning_state() -> None:
+    async def run() -> None:
+        (
+            application,
+            run_application,
+            planning_service,
+            _,
+        ) = create_services()
+
+        aggregate = await application.create_task("Research durable execution")
+
+        research_run = await run_application.create_run(aggregate.task.task_id)
+
+        assert research_run.status == ResearchRunStatus.PENDING
+
+        with pytest.raises(
+            ResearchPlanningError,
+            match="planning",
+        ):
+            await planning_service.create_plan(
+                aggregate.task.task_id,
+                research_run.run_id,
+            )
+
+    asyncio.run(run())
+
+
+def test_create_plan_rejects_mismatched_planner_output() -> None:
+    async def run() -> None:
+        planner = RecordingPlanner(wrong_run=True)
+
+        (
+            application,
+            run_application,
+            planning_service,
+            _,
+        ) = create_services(planner)
+
+        aggregate = await application.create_task("Research durable execution")
+
+        research_run = await run_application.create_run(aggregate.task.task_id)
+
+        await run_application.advance_run(
+            aggregate.task.task_id,
+            research_run.run_id,
+            ResearchRunStatus.PLANNING,
+        )
+
+        with pytest.raises(
+            ResearchPlanningError,
+            match="different task or run",
+        ):
+            await planning_service.create_plan(
+                aggregate.task.task_id,
+                research_run.run_id,
+            )
+
+    asyncio.run(run())

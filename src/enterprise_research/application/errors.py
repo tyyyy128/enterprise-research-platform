@@ -11,3 +11,7 @@ class ResearchTaskNotFoundError(ResearchApplicationError):
 
 class ResearchRunNotFoundError(ResearchApplicationError):
     """Raised when a requested research run does not exist."""
+
+
+class ResearchPlanningError(ResearchApplicationError):
+    """Raised when research planning cannot be completed safely."""
