@@ -12,6 +12,7 @@ from enterprise_research.infrastructure.postgres.models import (
     ResearchClaimRow,
     ResearchEvidenceRow,
     ResearchReportRow,
+    ResearchRunRow,
     ResearchSourceRow,
     ResearchTaskRow,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "ResearchClaimRow",
     "ResearchEvidenceRow",
     "ResearchReportRow",
+    "ResearchRunRow",
     "ResearchSourceRow",
     "ResearchTaskRow",
     "build_async_engine",

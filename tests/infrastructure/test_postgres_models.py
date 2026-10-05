@@ -9,6 +9,7 @@ def test_expected_postgres_tables_are_registered() -> None:
         "research_claims",
         "claim_evidence",
         "research_reports",
+        "research_runs",
         "report_claims",
     }
 
@@ -46,3 +47,14 @@ def test_report_is_unique_per_task() -> None:
     }
 
     assert "uq_research_reports_task_id" in unique_constraints
+
+
+def test_research_run_references_task() -> None:
+    table = Base.metadata.tables["research_runs"]
+
+    foreign_keys = {foreign_key.target_fullname for foreign_key in table.foreign_keys}
+
+    assert foreign_keys == {"research_tasks.id"}
+    assert table.columns["task_id"].nullable is False
+    assert table.columns["status"].nullable is False
+    assert table.columns["error"].nullable is True
