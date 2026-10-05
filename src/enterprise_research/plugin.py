@@ -28,6 +28,8 @@ from enterprise_research.api import (
 )
 from enterprise_research.application import (
     ResearchApplicationService,
+    ResearchPipelineStageRunner,
+    ResearchPlanningService,
     ResearchRunApplicationService,
     ResearchRunExecutor,
     ResearchRunNotFoundError,
@@ -47,6 +49,13 @@ from enterprise_research.infrastructure import (
     InMemoryResearchRepository,
     InMemoryResearchRunRepository,
 )
+from enterprise_research.infrastructure.memory_plan_repository import (
+    InMemoryResearchPlanRepository,
+)
+from enterprise_research.infrastructure.planning import (
+    OpenAICompatiblePlannerSettings,
+    OpenAICompatibleResearchPlanner,
+)
 from enterprise_research.infrastructure.postgres import (
     PostgresResearchRepository,
     PostgresResearchRunRepository,
@@ -54,6 +63,18 @@ from enterprise_research.infrastructure.postgres import (
     build_async_engine,
     build_session_factory,
 )
+from enterprise_research.infrastructure.postgres.plan_repository import (
+    PostgresResearchPlanRepository,
+)
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+
+    return value
 
 
 class EnterpriseResearchService:
@@ -66,55 +87,116 @@ class EnterpriseResearchService:
         self._run_executor: ResearchRunExecutor | None = None
         self._engine: AsyncEngine | None = None
 
-    async def start(self, deps: ExtensionRuntimeDeps) -> None:
+    async def start(
+        self,
+        deps: ExtensionRuntimeDeps,
+    ) -> None:
         """Start runtime resources."""
         self._deps = deps
 
-        repository_backend = (
-            os.getenv(
-                "ENTERPRISE_RESEARCH_REPOSITORY",
-                "memory",
+        try:
+            repository_backend = (
+                os.getenv(
+                    "ENTERPRISE_RESEARCH_REPOSITORY",
+                    "memory",
+                )
+                .strip()
+                .lower()
             )
-            .strip()
-            .lower()
-        )
 
-        if repository_backend == "memory":
-            research_repository = InMemoryResearchRepository()
-            run_repository = InMemoryResearchRunRepository()
+            if repository_backend == "memory":
+                research_repository = InMemoryResearchRepository()
+                run_repository = InMemoryResearchRunRepository()
+                plan_repository = InMemoryResearchPlanRepository()
 
-        elif repository_backend == "postgres":
-            try:
+            elif repository_backend == "postgres":
                 (
                     research_repository,
                     run_repository,
+                    plan_repository,
                 ) = await self._build_postgres_repositories()
-            except Exception:
-                self._deps = None
-                raise
 
-        else:
-            self._deps = None
+            else:
+                raise RuntimeError(
+                    "Unsupported Enterprise Research "
+                    "repository: "
+                    f"{repository_backend!r}. "
+                    "Expected 'memory' or 'postgres'."
+                )
 
-            raise RuntimeError(
-                f"Unsupported Enterprise Research repository: {repository_backend!r}. Expected 'memory' or 'postgres'."
+            application = ResearchApplicationService(research_repository)
+
+            run_application = ResearchRunApplicationService(
+                research_repository,
+                run_repository,
             )
 
-        self._application = ResearchApplicationService(research_repository)
-        self._run_application = ResearchRunApplicationService(
-            research_repository,
-            run_repository,
-        )
-        self._run_executor = ResearchRunExecutor(
-            self._run_application,
-            SkeletonResearchStageRunner(),
-        )
+            planner_backend = (
+                os.getenv(
+                    "ENTERPRISE_RESEARCH_PLANNER_BACKEND",
+                    "disabled",
+                )
+                .strip()
+                .lower()
+            )
+
+            if planner_backend == "disabled":
+                stage_runner = SkeletonResearchStageRunner()
+
+            elif planner_backend == "openai-compatible":
+                planner = OpenAICompatibleResearchPlanner(
+                    OpenAICompatiblePlannerSettings(
+                        base_url=_required_env("ENTERPRISE_RESEARCH_PLANNER_BASE_URL"),
+                        api_key=_required_env("ENTERPRISE_RESEARCH_PLANNER_API_KEY"),
+                        model=_required_env("ENTERPRISE_RESEARCH_PLANNER_MODEL"),
+                    )
+                )
+
+                planning_service = ResearchPlanningService(
+                    research_repository,
+                    run_repository,
+                    plan_repository,
+                    planner,
+                )
+
+                stage_runner = ResearchPipelineStageRunner(planning_service)
+
+            else:
+                raise RuntimeError(
+                    "Unsupported Enterprise Research "
+                    "planner backend: "
+                    f"{planner_backend!r}. "
+                    "Expected 'disabled' or "
+                    "'openai-compatible'."
+                )
+
+            run_executor = ResearchRunExecutor(
+                run_application,
+                stage_runner,
+            )
+
+        except Exception:
+            if self._engine is not None:
+                await self._engine.dispose()
+                self._engine = None
+
+            self._application = None
+            self._run_application = None
+            self._run_executor = None
+            self._deps = None
+
+            raise
+
+        self._application = application
+        self._run_application = run_application
+        self._run_executor = run_executor
 
     async def _build_postgres_repositories(
         self,
     ) -> tuple[
         PostgresResearchRepository,
         PostgresResearchRunRepository,
+        PostgresResearchPlanRepository,
     ]:
         """Build and verify PostgreSQL repositories."""
         settings = PostgresSettings.from_env()
@@ -122,39 +204,36 @@ class EnterpriseResearchService:
 
         try:
             async with engine.connect() as connection:
-                research_tasks_table = await connection.scalar(
-                    text(
-                        """
-                        SELECT to_regclass(
-                            'public.research_tasks'
-                        )
-                        """
-                    )
-                )
-                research_runs_table = await connection.scalar(
-                    text(
-                        """
-                        SELECT to_regclass(
-                            'public.research_runs'
-                        )
-                        """
-                    )
+                required_tables = (
+                    "research_tasks",
+                    "research_runs",
+                    "research_plans",
+                    "research_plan_questions",
                 )
 
-                if research_tasks_table is None or research_runs_table is None:
-                    raise RuntimeError(
-                        "Enterprise Research PostgreSQL schema is not initialized. Run 'alembic upgrade head' first."
-                    )
+                for table_name in required_tables:
+                    table = await connection.scalar(text(f"SELECT to_regclass('public.{table_name}')"))
+
+                    if table is None:
+                        raise RuntimeError(
+                            "Enterprise Research "
+                            "PostgreSQL schema is not "
+                            "initialized. Run "
+                            "'alembic upgrade head' first."
+                        )
+
         except Exception:
             await engine.dispose()
             raise
 
         self._engine = engine
+
         session_factory = build_session_factory(engine)
 
         return (
             PostgresResearchRepository(session_factory),
             PostgresResearchRunRepository(session_factory),
+            PostgresResearchPlanRepository(session_factory),
         )
 
     async def stop(self) -> None:
