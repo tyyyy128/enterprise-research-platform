@@ -5,6 +5,11 @@ from enterprise_research.application.errors import (
     ResearchRunNotFoundError,
     ResearchTaskNotFoundError,
 )
+from enterprise_research.application.executor import (
+    ResearchRunExecutor,
+    ResearchStageRunner,
+    SkeletonResearchStageRunner,
+)
 from enterprise_research.application.repository import (
     ResearchRepository,
 )
@@ -23,7 +28,10 @@ __all__ = [
     "ResearchApplicationService",
     "ResearchRepository",
     "ResearchRunApplicationService",
+    "ResearchRunExecutor",
     "ResearchRunNotFoundError",
     "ResearchRunRepository",
+    "ResearchStageRunner",
     "ResearchTaskNotFoundError",
+    "SkeletonResearchStageRunner",
 ]

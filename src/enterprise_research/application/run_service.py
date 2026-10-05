@@ -14,7 +14,10 @@ from enterprise_research.application.repository import (
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
-from enterprise_research.domain import ResearchRun
+from enterprise_research.domain import (
+    ResearchRun,
+    ResearchRunStatus,
+)
 
 
 class ResearchRunApplicationService:
@@ -54,5 +57,41 @@ class ResearchRunApplicationService:
 
         if run is None or run.task_id != task_id:
             raise ResearchRunNotFoundError(f"Research run not found: {run_id}")
+
+        return run
+
+    async def advance_run(
+        self,
+        task_id: UUID,
+        run_id: UUID,
+        next_status: ResearchRunStatus,
+    ) -> ResearchRun:
+        """Advance and persist one valid run transition."""
+        run = await self.get_run(
+            task_id,
+            run_id,
+        )
+
+        run.advance(next_status)
+
+        await self._run_repository.save(run)
+
+        return run
+
+    async def fail_run(
+        self,
+        task_id: UUID,
+        run_id: UUID,
+        error: str,
+    ) -> ResearchRun:
+        """Fail and persist a research run."""
+        run = await self.get_run(
+            task_id,
+            run_id,
+        )
+
+        run.fail(error)
+
+        await self._run_repository.save(run)
 
         return run

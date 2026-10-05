@@ -29,8 +29,10 @@ from enterprise_research.api import (
 from enterprise_research.application import (
     ResearchApplicationService,
     ResearchRunApplicationService,
+    ResearchRunExecutor,
     ResearchRunNotFoundError,
     ResearchTaskNotFoundError,
+    SkeletonResearchStageRunner,
 )
 from enterprise_research.domain import (
     Claim,
@@ -61,6 +63,7 @@ class EnterpriseResearchService:
         self._deps: ExtensionRuntimeDeps | None = None
         self._application: ResearchApplicationService | None = None
         self._run_application: ResearchRunApplicationService | None = None
+        self._run_executor: ResearchRunExecutor | None = None
         self._engine: AsyncEngine | None = None
 
     async def start(self, deps: ExtensionRuntimeDeps) -> None:
@@ -101,6 +104,10 @@ class EnterpriseResearchService:
         self._run_application = ResearchRunApplicationService(
             research_repository,
             run_repository,
+        )
+        self._run_executor = ResearchRunExecutor(
+            self._run_application,
+            SkeletonResearchStageRunner(),
         )
 
     async def _build_postgres_repositories(
@@ -152,6 +159,10 @@ class EnterpriseResearchService:
 
     async def stop(self) -> None:
         """Release runtime resources."""
+        if self._run_executor is not None:
+            await self._run_executor.shutdown()
+            self._run_executor = None
+
         self._application = None
         self._run_application = None
 
@@ -200,6 +211,20 @@ class EnterpriseResearchService:
             )
 
         return application
+
+    async def require_run_executor(
+        self,
+    ) -> ResearchRunExecutor:
+        """Return the active research run executor."""
+        executor = self._run_executor
+
+        if executor is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="enterprise-research extension is not running",
+            )
+
+        return executor
 
 
 def build_router(service: EnterpriseResearchService) -> APIRouter:
@@ -455,6 +480,7 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
     async def create_run(
         task_id: UUID,
         application: ResearchRunApplicationService = Depends(service.require_run_application),
+        executor: ResearchRunExecutor = Depends(service.require_run_executor),
     ) -> ResearchRunResponse:
         try:
             run = await application.create_run(task_id)
@@ -463,6 +489,11 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(exc),
             ) from exc
+
+        executor.start(
+            task_id,
+            run.run_id,
+        )
 
         return ResearchRunResponse.from_domain(run)
 

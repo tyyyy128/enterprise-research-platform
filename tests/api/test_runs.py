@@ -25,7 +25,7 @@ def create_runtime_deps() -> ExtensionRuntimeDeps:
     )
 
 
-def test_create_and_get_research_run() -> None:
+def test_create_run_returns_pending_then_completes() -> None:
     async def run() -> None:
         service = EnterpriseResearchService()
 
@@ -41,10 +41,11 @@ def test_create_and_get_research_run() -> None:
             ) as client:
                 task_response = await client.post(
                     "/api/enterprise-research/tasks",
-                    json={"query": "Research durable execution"},
+                    json={"query": ("Research durable execution")},
                 )
 
                 assert task_response.status_code == 201
+
                 task_id = task_response.json()["task_id"]
 
                 create_response = await client.post(f"/api/enterprise-research/tasks/{task_id}/runs")
@@ -60,11 +61,30 @@ def test_create_and_get_research_run() -> None:
                 assert created["error"] is None
 
                 run_id = created["run_id"]
+                completed = None
 
-                get_response = await client.get(f"/api/enterprise-research/tasks/{task_id}/runs/{run_id}")
+                for _ in range(50):
+                    response = await client.get(f"/api/enterprise-research/tasks/{task_id}/runs/{run_id}")
 
-                assert get_response.status_code == 200
-                assert get_response.json() == created
+                    assert response.status_code == 200
+
+                    payload = response.json()
+
+                    if payload["status"] in {
+                        "completed",
+                        "failed",
+                    }:
+                        completed = payload
+                        break
+
+                    await asyncio.sleep(0)
+
+                assert completed is not None
+                assert completed["status"] == "completed"
+                assert completed["started_at"] is not None
+                assert completed["completed_at"] is not None
+                assert completed["error"] is None
+
         finally:
             await service.stop()
 
@@ -89,6 +109,7 @@ def test_create_run_for_unknown_task_returns_404() -> None:
 
                 assert response.status_code == 404
                 assert "Research task not found" in (response.json()["detail"])
+
         finally:
             await service.stop()
 
@@ -123,12 +144,15 @@ def test_run_cannot_be_read_through_another_task() -> None:
 
                 created = await client.post(f"/api/enterprise-research/tasks/{first_task_id}/runs")
 
+                assert created.status_code == 201
+
                 run_id = created.json()["run_id"]
 
                 response = await client.get(f"/api/enterprise-research/tasks/{second_task_id}/runs/{run_id}")
 
                 assert response.status_code == 404
                 assert "Research run not found" in (response.json()["detail"])
+
         finally:
             await service.stop()
 
