@@ -48,21 +48,39 @@ class PostgresResearchRepository:
 
         async with self._session_factory() as session:
             async with session.begin():
-                # V1 persistence strategy:
-                # replace the complete aggregate inside one transaction.
-                await session.execute(delete(ResearchTaskRow).where(ResearchTaskRow.id == task.task_id))
-
-                session.add(
-                    ResearchTaskRow(
-                        id=task.task_id,
-                        query=task.query,
-                        status=task.status.value,
-                        created_at=task.created_at,
-                        updated_at=task.updated_at,
-                    )
+                # Version 2 persistence strategy:
+                # keep the task row stable and replace only aggregate-owned
+                # child rows. ResearchRun records will reference the task row.
+                task_row = await session.get(
+                    ResearchTaskRow,
+                    task.task_id,
                 )
 
+                if task_row is None:
+                    session.add(
+                        ResearchTaskRow(
+                            id=task.task_id,
+                            query=task.query,
+                            status=task.status.value,
+                            created_at=task.created_at,
+                            updated_at=task.updated_at,
+                        )
+                    )
+                else:
+                    task_row.query = task.query
+                    task_row.status = task.status.value
+                    task_row.created_at = task.created_at
+                    task_row.updated_at = task.updated_at
+
                 await session.flush()
+
+                # Replace the Aggregate-owned graph, but never delete
+                # research_tasks itself. Future ResearchRun rows must survive
+                # repeated Aggregate saves.
+                await session.execute(delete(ResearchReportRow).where(ResearchReportRow.task_id == task.task_id))
+                await session.execute(delete(ResearchClaimRow).where(ResearchClaimRow.task_id == task.task_id))
+                await session.execute(delete(ResearchEvidenceRow).where(ResearchEvidenceRow.task_id == task.task_id))
+                await session.execute(delete(ResearchSourceRow).where(ResearchSourceRow.task_id == task.task_id))
 
                 source_rows = [
                     ResearchSourceRow(
