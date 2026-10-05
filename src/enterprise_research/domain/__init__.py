@@ -20,6 +20,7 @@ from enterprise_research.domain.models import (
     Source,
     SourceType,
 )
+from enterprise_research.domain.plan import ResearchPlan, ResearchQuestion
 from enterprise_research.domain.run import ResearchRun, ResearchRunStatus
 
 __all__ = [
@@ -31,6 +32,8 @@ __all__ = [
     "InvalidResearchRunTransitionError",
     "ResearchAggregate",
     "ResearchDomainError",
+    "ResearchPlan",
+    "ResearchQuestion",
     "ResearchReport",
     "ResearchRun",
     "ResearchRunStatus",
