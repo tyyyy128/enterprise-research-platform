@@ -14,6 +14,8 @@ from enterprise_research.domain import (
     Evidence,
     ResearchAggregate,
     ResearchReport,
+    ResearchRun,
+    ResearchRunStatus,
     ResearchTaskStatus,
     Source,
     SourceType,
@@ -235,4 +237,35 @@ class ResearchReportResponse(BaseModel):
             summary=report.summary,
             claim_ids=report.claim_ids,
             generated_at=report.generated_at,
+        )
+
+
+class ResearchRunResponse(BaseModel):
+    """Stable API representation of one research execution run."""
+
+    run_id: UUID
+    task_id: UUID
+    status: ResearchRunStatus
+
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+
+    error: str | None
+
+    @classmethod
+    def from_domain(
+        cls,
+        run: ResearchRun,
+    ) -> ResearchRunResponse:
+        return cls(
+            run_id=run.run_id,
+            task_id=run.task_id,
+            status=run.status,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            error=run.error,
         )

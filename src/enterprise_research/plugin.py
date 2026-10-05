@@ -21,12 +21,15 @@ from enterprise_research.api import (
     CreateSourceRequest,
     EvidenceResponse,
     ResearchReportResponse,
+    ResearchRunResponse,
     ResearchTaskResponse,
     SourceResponse,
     SupportClaimRequest,
 )
 from enterprise_research.application import (
     ResearchApplicationService,
+    ResearchRunApplicationService,
+    ResearchRunNotFoundError,
     ResearchTaskNotFoundError,
 )
 from enterprise_research.domain import (
@@ -40,9 +43,11 @@ from enterprise_research.domain import (
 )
 from enterprise_research.infrastructure import (
     InMemoryResearchRepository,
+    InMemoryResearchRunRepository,
 )
 from enterprise_research.infrastructure.postgres import (
     PostgresResearchRepository,
+    PostgresResearchRunRepository,
     PostgresSettings,
     build_async_engine,
     build_session_factory,
@@ -55,6 +60,7 @@ class EnterpriseResearchService:
     def __init__(self) -> None:
         self._deps: ExtensionRuntimeDeps | None = None
         self._application: ResearchApplicationService | None = None
+        self._run_application: ResearchRunApplicationService | None = None
         self._engine: AsyncEngine | None = None
 
     async def start(self, deps: ExtensionRuntimeDeps) -> None:
@@ -71,11 +77,15 @@ class EnterpriseResearchService:
         )
 
         if repository_backend == "memory":
-            repository = InMemoryResearchRepository()
+            research_repository = InMemoryResearchRepository()
+            run_repository = InMemoryResearchRunRepository()
 
         elif repository_backend == "postgres":
             try:
-                repository = await self._build_postgres_repository()
+                (
+                    research_repository,
+                    run_repository,
+                ) = await self._build_postgres_repositories()
             except Exception:
                 self._deps = None
                 raise
@@ -87,12 +97,19 @@ class EnterpriseResearchService:
                 f"Unsupported Enterprise Research repository: {repository_backend!r}. Expected 'memory' or 'postgres'."
             )
 
-        self._application = ResearchApplicationService(repository)
+        self._application = ResearchApplicationService(research_repository)
+        self._run_application = ResearchRunApplicationService(
+            research_repository,
+            run_repository,
+        )
 
-    async def _build_postgres_repository(
+    async def _build_postgres_repositories(
         self,
-    ) -> PostgresResearchRepository:
-        """Build and verify the PostgreSQL repository."""
+    ) -> tuple[
+        PostgresResearchRepository,
+        PostgresResearchRunRepository,
+    ]:
+        """Build and verify PostgreSQL repositories."""
         settings = PostgresSettings.from_env()
         engine = build_async_engine(settings)
 
@@ -107,8 +124,17 @@ class EnterpriseResearchService:
                         """
                     )
                 )
+                research_runs_table = await connection.scalar(
+                    text(
+                        """
+                        SELECT to_regclass(
+                            'public.research_runs'
+                        )
+                        """
+                    )
+                )
 
-                if research_tasks_table is None:
+                if research_tasks_table is None or research_runs_table is None:
                     raise RuntimeError(
                         "Enterprise Research PostgreSQL schema is not initialized. Run 'alembic upgrade head' first."
                     )
@@ -117,12 +143,17 @@ class EnterpriseResearchService:
             raise
 
         self._engine = engine
+        session_factory = build_session_factory(engine)
 
-        return PostgresResearchRepository(build_session_factory(engine))
+        return (
+            PostgresResearchRepository(session_factory),
+            PostgresResearchRunRepository(session_factory),
+        )
 
     async def stop(self) -> None:
         """Release runtime resources."""
         self._application = None
+        self._run_application = None
 
         if self._engine is not None:
             await self._engine.dispose()
@@ -147,6 +178,20 @@ class EnterpriseResearchService:
     ) -> ResearchApplicationService:
         """Return the application service while runtime is active."""
         application = self._application
+
+        if application is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="enterprise-research extension is not running",
+            )
+
+        return application
+
+    async def require_run_application(
+        self,
+    ) -> ResearchRunApplicationService:
+        """Return the run application service while runtime is active."""
+        application = self._run_application
 
         if application is None:
             raise HTTPException(
@@ -401,5 +446,46 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
             ) from exc
 
         return ResearchReportResponse.from_domain(report)
+
+    @router.post(
+        "/tasks/{task_id}/runs",
+        response_model=ResearchRunResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_run(
+        task_id: UUID,
+        application: ResearchRunApplicationService = Depends(service.require_run_application),
+    ) -> ResearchRunResponse:
+        try:
+            run = await application.create_run(task_id)
+        except ResearchTaskNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return ResearchRunResponse.from_domain(run)
+
+    @router.get(
+        "/tasks/{task_id}/runs/{run_id}",
+        response_model=ResearchRunResponse,
+    )
+    async def get_run(
+        task_id: UUID,
+        run_id: UUID,
+        application: ResearchRunApplicationService = Depends(service.require_run_application),
+    ) -> ResearchRunResponse:
+        try:
+            run = await application.get_run(
+                task_id,
+                run_id,
+            )
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        return ResearchRunResponse.from_domain(run)
 
     return router

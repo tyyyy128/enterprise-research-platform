@@ -7,3 +7,7 @@ class ResearchApplicationError(RuntimeError):
 
 class ResearchTaskNotFoundError(ResearchApplicationError):
     """Raised when a requested research task does not exist."""
+
+
+class ResearchRunNotFoundError(ResearchApplicationError):
+    """Raised when a requested research run does not exist."""

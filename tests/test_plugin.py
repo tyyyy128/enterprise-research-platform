@@ -44,6 +44,8 @@ def test_install_registers_service_and_router() -> None:
         "/api/enterprise-research/tasks/{task_id}/claims/{claim_id}/support",
         "/api/enterprise-research/tasks/{task_id}/claims/{claim_id}/lineage",
         "/api/enterprise-research/tasks/{task_id}/report",
+        "/api/enterprise-research/tasks/{task_id}/runs",
+        "/api/enterprise-research/tasks/{task_id}/runs/{run_id}",
     }
 
     assert install.__deerflow_api__ == "0.2.0"
