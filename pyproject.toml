@@ -10,6 +10,7 @@ dependencies = [
     "fastapi>=0.115,<1",
     "pydantic>=2.13,<3",
     "sqlalchemy[asyncio]>=2.0,<3",
+    "httpx>=0.28,<1",
 ]
 
 [project.entry-points."deerflow.extensions"]
@@ -17,7 +18,6 @@ enterprise-research = "enterprise_research:install"
 [project.optional-dependencies]
 dev = [
     "alembic>=1.13,<2",
-    "httpx>=0.28,<1",
     "pytest>=9,<10",
     "ruff>=0.15,<1",
 ]
@@ -39,3 +39,6 @@ select = ["E", "F", "I", "UP"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.uv.sources]
+deerflow-extension-api = { path = "../deer-flow/backend/packages/extension-api", editable = true }
