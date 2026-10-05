@@ -3,5 +3,8 @@
 from enterprise_research.infrastructure.memory_repository import (
     InMemoryResearchRepository,
 )
+from enterprise_research.infrastructure.memory_run_repository import (
+    InMemoryResearchRunRepository,
+)
 
-__all__ = ["InMemoryResearchRepository"]
+__all__ = ["InMemoryResearchRepository", "InMemoryResearchRunRepository"]
