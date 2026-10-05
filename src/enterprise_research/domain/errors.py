@@ -23,3 +23,7 @@ class UnknownClaimError(ResearchDomainError):
 
 class InvalidReportError(ResearchDomainError):
     """Raised when a report violates research domain rules."""
+
+
+class InvalidResearchRunTransitionError(ResearchDomainError):
+    """Raised when a research run attempts an invalid state transition."""

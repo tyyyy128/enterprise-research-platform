@@ -4,6 +4,7 @@ from enterprise_research.domain.aggregate import ResearchAggregate
 from enterprise_research.domain.errors import (
     DuplicateEntityError,
     InvalidReportError,
+    InvalidResearchRunTransitionError,
     ResearchDomainError,
     UnknownClaimError,
     UnknownEvidenceError,
@@ -19,6 +20,7 @@ from enterprise_research.domain.models import (
     Source,
     SourceType,
 )
+from enterprise_research.domain.run import ResearchRun, ResearchRunStatus
 
 __all__ = [
     "Claim",
@@ -26,9 +28,12 @@ __all__ = [
     "DuplicateEntityError",
     "Evidence",
     "InvalidReportError",
+    "InvalidResearchRunTransitionError",
     "ResearchAggregate",
     "ResearchDomainError",
     "ResearchReport",
+    "ResearchRun",
+    "ResearchRunStatus",
     "ResearchTask",
     "ResearchTaskStatus",
     "Source",
