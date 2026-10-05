@@ -39,6 +39,3 @@ select = ["E", "F", "I", "UP"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-
-[tool.uv.sources]
-deerflow-extension-api = { path = "../deer-flow/backend/packages/extension-api", editable = true }
