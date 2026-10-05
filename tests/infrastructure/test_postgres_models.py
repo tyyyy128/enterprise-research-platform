@@ -10,6 +10,8 @@ def test_expected_postgres_tables_are_registered() -> None:
         "claim_evidence",
         "research_reports",
         "research_runs",
+        "research_plan_questions",
+        "research_plans",
         "report_claims",
     }
 
@@ -58,3 +60,23 @@ def test_research_run_references_task() -> None:
     assert table.columns["task_id"].nullable is False
     assert table.columns["status"].nullable is False
     assert table.columns["error"].nullable is True
+
+
+def test_research_plan_references_run() -> None:
+    table = Base.metadata.tables["research_plans"]
+
+    foreign_keys = {foreign_key.target_fullname for foreign_key in table.foreign_keys}
+
+    assert foreign_keys == {"research_runs.id"}
+    assert table.columns["run_id"].nullable is False
+    assert table.columns["run_id"].unique is True
+
+
+def test_research_plan_question_references_plan() -> None:
+    table = Base.metadata.tables["research_plan_questions"]
+
+    foreign_keys = {foreign_key.target_fullname for foreign_key in table.foreign_keys}
+
+    assert foreign_keys == {"research_plans.id"}
+    assert table.columns["plan_id"].nullable is False
+    assert table.columns["position"].nullable is False
