@@ -310,3 +310,61 @@ def test_create_plan_persists_validated_plan() -> None:
         assert persisted == created
 
     asyncio.run(run())
+
+
+def test_existing_plan_is_reused_without_calling_planner() -> None:
+    async def run() -> None:
+        research_repository = InMemoryResearchRepository()
+        run_repository = InMemoryResearchRunRepository()
+        plan_repository = InMemoryResearchPlanRepository()
+
+        class UnexpectedPlanner:
+            async def plan(
+                self,
+                *,
+                task: ResearchTask,
+                run: ResearchRun,
+            ) -> ResearchPlan:
+                raise AssertionError("Planner must not be called when a persisted plan exists.")
+
+        application = ResearchApplicationService(research_repository)
+
+        run_application = ResearchRunApplicationService(
+            research_repository,
+            run_repository,
+        )
+
+        planning_service = ResearchPlanningService(
+            research_repository,
+            run_repository,
+            plan_repository,
+            UnexpectedPlanner(),
+        )
+
+        aggregate = await application.create_task("Research durable execution")
+
+        research_run = await run_application.create_run(aggregate.task.task_id)
+
+        await run_application.advance_run(
+            aggregate.task.task_id,
+            research_run.run_id,
+            ResearchRunStatus.PLANNING,
+        )
+
+        existing = ResearchPlan(
+            task_id=aggregate.task.task_id,
+            run_id=research_run.run_id,
+            objective="Existing durable plan.",
+            questions=[ResearchQuestion(question="How does recovery work?")],
+        )
+
+        await plan_repository.save(existing)
+
+        returned = await planning_service.create_plan(
+            aggregate.task.task_id,
+            research_run.run_id,
+        )
+
+        assert returned == existing
+
+    asyncio.run(run())

@@ -61,6 +61,14 @@ class ResearchPlanningService:
         if run.status != ResearchRunStatus.PLANNING:
             raise ResearchPlanningError("Research run must be in 'planning' state before creating a plan.")
 
+        existing_plan = await self._plan_repository.get_for_run(run_id)
+
+        if existing_plan is not None:
+            if existing_plan.task_id != task_id:
+                raise ResearchPlanningError("Persisted research plan belongs to a different task.")
+
+            return existing_plan
+
         plan = await self._planner.plan(
             task=aggregate.task,
             run=run,

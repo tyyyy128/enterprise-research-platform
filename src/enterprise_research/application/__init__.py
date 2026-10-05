@@ -11,6 +11,9 @@ from enterprise_research.application.executor import (
     ResearchStageRunner,
     SkeletonResearchStageRunner,
 )
+from enterprise_research.application.pipeline import (
+    ResearchPipelineStageRunner,
+)
 from enterprise_research.application.planner import (
     ResearchPlanner,
 )
@@ -33,6 +36,7 @@ from enterprise_research.application.service import (
 __all__ = [
     "ResearchApplicationError",
     "ResearchApplicationService",
+    "ResearchPipelineStageRunner",
     "ResearchPlanner",
     "ResearchPlanningError",
     "ResearchPlanningService",
