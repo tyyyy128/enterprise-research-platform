@@ -9,6 +9,9 @@ from enterprise_research.application.errors import (
     ResearchRunNotFoundError,
     ResearchTaskNotFoundError,
 )
+from enterprise_research.application.plan_repository import (
+    ResearchPlanRepository,
+)
 from enterprise_research.application.planner import (
     ResearchPlanner,
 )
@@ -31,10 +34,12 @@ class ResearchPlanningService:
         self,
         research_repository: ResearchRepository,
         run_repository: ResearchRunRepository,
+        plan_repository: ResearchPlanRepository,
         planner: ResearchPlanner,
     ) -> None:
         self._research_repository = research_repository
         self._run_repository = run_repository
+        self._plan_repository = plan_repository
         self._planner = planner
 
     async def create_plan(
@@ -63,5 +68,7 @@ class ResearchPlanningService:
 
         if plan.task_id != task_id or plan.run_id != run_id:
             raise ResearchPlanningError("Planner returned a plan for a different task or run.")
+
+        await self._plan_repository.save(plan)
 
         return plan

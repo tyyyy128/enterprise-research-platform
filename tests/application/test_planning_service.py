@@ -24,6 +24,9 @@ from enterprise_research.infrastructure import (
     InMemoryResearchRepository,
     InMemoryResearchRunRepository,
 )
+from enterprise_research.infrastructure.memory_plan_repository import (
+    InMemoryResearchPlanRepository,
+)
 
 
 class RecordingPlanner:
@@ -77,6 +80,7 @@ def create_services(
 ]:
     research_repository = InMemoryResearchRepository()
     run_repository = InMemoryResearchRunRepository()
+    plan_repository = InMemoryResearchPlanRepository()
 
     planner = planner or RecordingPlanner()
 
@@ -89,6 +93,7 @@ def create_services(
         ResearchPlanningService(
             research_repository,
             run_repository,
+            plan_repository,
             planner,
         ),
         planner,
@@ -262,5 +267,46 @@ def test_create_plan_rejects_mismatched_planner_output() -> None:
                 aggregate.task.task_id,
                 research_run.run_id,
             )
+
+    asyncio.run(run())
+
+
+def test_create_plan_persists_validated_plan() -> None:
+    async def run() -> None:
+        research_repository = InMemoryResearchRepository()
+        run_repository = InMemoryResearchRunRepository()
+        plan_repository = InMemoryResearchPlanRepository()
+        planner = RecordingPlanner()
+
+        application = ResearchApplicationService(research_repository)
+        run_application = ResearchRunApplicationService(
+            research_repository,
+            run_repository,
+        )
+        planning_service = ResearchPlanningService(
+            research_repository,
+            run_repository,
+            plan_repository,
+            planner,
+        )
+
+        aggregate = await application.create_task("Research durable execution")
+
+        research_run = await run_application.create_run(aggregate.task.task_id)
+
+        await run_application.advance_run(
+            aggregate.task.task_id,
+            research_run.run_id,
+            ResearchRunStatus.PLANNING,
+        )
+
+        created = await planning_service.create_plan(
+            aggregate.task.task_id,
+            research_run.run_id,
+        )
+
+        persisted = await plan_repository.get_for_run(research_run.run_id)
+
+        assert persisted == created
 
     asyncio.run(run())
