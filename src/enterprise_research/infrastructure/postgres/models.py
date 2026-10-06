@@ -104,6 +104,74 @@ class ResearchSourceRow(Base):
     )
 
 
+class ResearchSourceDocumentRow(Base):
+    """Latest retrieval outcome for one research source."""
+
+    __tablename__ = "research_source_documents"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('succeeded', 'failed')",
+            name="ck_research_source_documents_status",
+        ),
+    )
+
+    source_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey(
+            "research_sources.id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+
+    requested_url: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    final_url: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+
+    content: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    content_type: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    document_metadata: Mapped[dict[str, object]] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        default=dict,
+    )
+
+
 class ResearchEvidenceRow(Base):
     """Persisted research evidence."""
 

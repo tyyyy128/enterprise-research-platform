@@ -5,6 +5,9 @@ from enterprise_research.infrastructure.postgres.database import (
     build_async_engine,
     build_session_factory,
 )
+from enterprise_research.infrastructure.postgres.document_repository import (
+    PostgresRetrievedDocumentRepository,
+)
 from enterprise_research.infrastructure.postgres.models import (
     Base,
     ClaimEvidenceRow,
@@ -13,6 +16,7 @@ from enterprise_research.infrastructure.postgres.models import (
     ResearchEvidenceRow,
     ResearchReportRow,
     ResearchRunRow,
+    ResearchSourceDocumentRow,
     ResearchSourceRow,
     ResearchTaskRow,
 )
@@ -38,4 +42,6 @@ __all__ = [
     "ResearchTaskRow",
     "build_async_engine",
     "build_session_factory",
+    "PostgresRetrievedDocumentRepository",
+    "ResearchSourceDocumentRow",
 ]

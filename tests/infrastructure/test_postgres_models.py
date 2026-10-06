@@ -5,6 +5,7 @@ def test_expected_postgres_tables_are_registered() -> None:
     assert set(Base.metadata.tables) == {
         "research_tasks",
         "research_sources",
+        "research_source_documents",
         "research_evidence",
         "research_claims",
         "claim_evidence",
@@ -80,3 +81,15 @@ def test_research_plan_question_references_plan() -> None:
     assert foreign_keys == {"research_plans.id"}
     assert table.columns["plan_id"].nullable is False
     assert table.columns["position"].nullable is False
+
+
+def test_retrieved_document_references_source() -> None:
+    table = Base.metadata.tables["research_source_documents"]
+
+    foreign_keys = {foreign_key.target_fullname for foreign_key in table.foreign_keys}
+
+    assert foreign_keys == {"research_sources.id"}
+
+    assert {column.name for column in table.primary_key.columns} == {"source_id"}
+
+    assert "metadata" in table.columns

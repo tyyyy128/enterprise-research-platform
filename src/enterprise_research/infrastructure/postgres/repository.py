@@ -80,25 +80,60 @@ class PostgresResearchRepository:
                 await session.execute(delete(ResearchReportRow).where(ResearchReportRow.task_id == task.task_id))
                 await session.execute(delete(ResearchClaimRow).where(ResearchClaimRow.task_id == task.task_id))
                 await session.execute(delete(ResearchEvidenceRow).where(ResearchEvidenceRow.task_id == task.task_id))
-                await session.execute(delete(ResearchSourceRow).where(ResearchSourceRow.task_id == task.task_id))
 
-                source_rows = [
-                    ResearchSourceRow(
-                        id=source.source_id,
-                        task_id=task.task_id,
-                        source_type=source.source_type.value,
-                        title=source.title,
-                        url=(str(source.url) if source.url is not None else None),
-                        retrieved_at=source.retrieved_at,
-                        content_hash=source.content_hash,
-                        source_metadata=dict(source.metadata),
+                # Keep surviving Source rows stable so independently
+                # persisted retrieval documents can safely reference them.
+                source_result = await session.execute(
+                    select(ResearchSourceRow).where(ResearchSourceRow.task_id == task.task_id)
+                )
+
+                existing_sources = {row.id: row for row in source_result.scalars().all()}
+
+                desired_source_ids = set(aggregate.sources)
+
+                stale_source_ids = set(existing_sources) - desired_source_ids
+
+                if stale_source_ids:
+                    await session.execute(
+                        delete(ResearchSourceRow).where(
+                            ResearchSourceRow.task_id == task.task_id,
+                            ResearchSourceRow.id.in_(list(stale_source_ids)),
+                        )
                     )
-                    for source in aggregate.sources.values()
-                ]
 
-                if source_rows:
-                    session.add_all(source_rows)
-                    await session.flush()
+                for source in aggregate.sources.values():
+                    row = existing_sources.get(source.source_id)
+
+                    source_url = str(source.url) if source.url is not None else None
+
+                    if row is None:
+                        session.add(
+                            ResearchSourceRow(
+                                id=source.source_id,
+                                task_id=task.task_id,
+                                source_type=(source.source_type.value),
+                                title=source.title,
+                                url=source_url,
+                                retrieved_at=(source.retrieved_at),
+                                content_hash=(source.content_hash),
+                                source_metadata=dict(source.metadata),
+                            )
+                        )
+
+                        continue
+
+                    row.source_type = source.source_type.value
+
+                    row.title = source.title
+                    row.url = source_url
+
+                    row.retrieved_at = source.retrieved_at
+
+                    row.content_hash = source.content_hash
+
+                    row.source_metadata = dict(source.metadata)
+
+                await session.flush()
 
                 evidence_rows = [
                     ResearchEvidenceRow(
