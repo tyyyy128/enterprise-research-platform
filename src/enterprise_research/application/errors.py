@@ -23,3 +23,7 @@ class ResearchSearchError(ResearchApplicationError):
 
 class ResearchRetrievalError(ResearchApplicationError):
     """Raised when research source retrieval cannot proceed safely."""
+
+
+class ResearchEvidenceExtractionError(ResearchApplicationError):
+    """Raised when verified evidence extraction cannot proceed safely."""
