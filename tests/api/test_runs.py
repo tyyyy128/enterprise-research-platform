@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from uuid import uuid4
 
+import pytest
 from deerflow_extension_api import (
     ExtensionData,
     ExtensionRuntimeDeps,
@@ -23,6 +24,27 @@ def create_runtime_deps() -> ExtensionRuntimeDeps:
         policy=HostPolicySnapshot(max_subagents_per_run=3),
         session_factory=object(),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_run_api_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_REPOSITORY",
+        "memory",
+    )
+
+    for name in (
+        "ENTERPRISE_RESEARCH_PLANNER_BACKEND",
+        "ENTERPRISE_RESEARCH_SEARCH_BACKEND",
+        "ENTERPRISE_RESEARCH_RETRIEVAL_BACKEND",
+        "ENTERPRISE_RESEARCH_EVIDENCE_BACKEND",
+    ):
+        monkeypatch.setenv(
+            name,
+            "disabled",
+        )
 
 
 def test_create_run_returns_pending_then_completes() -> None:
