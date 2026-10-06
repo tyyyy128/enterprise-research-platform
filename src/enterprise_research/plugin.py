@@ -30,6 +30,7 @@ from enterprise_research.application import (
     ResearchApplicationService,
     ResearchPipelineStageRunner,
     ResearchPlanningService,
+    ResearchRetrievalService,
     ResearchRunApplicationService,
     ResearchRunExecutor,
     ResearchRunNotFoundError,
@@ -49,6 +50,7 @@ from enterprise_research.domain import (
 from enterprise_research.infrastructure import (
     InMemoryResearchRepository,
     InMemoryResearchRunRepository,
+    InMemoryRetrievedDocumentRepository,
 )
 from enterprise_research.infrastructure.memory_plan_repository import (
     InMemoryResearchPlanRepository,
@@ -60,6 +62,7 @@ from enterprise_research.infrastructure.planning import (
 from enterprise_research.infrastructure.postgres import (
     PostgresResearchRepository,
     PostgresResearchRunRepository,
+    PostgresRetrievedDocumentRepository,
     PostgresSettings,
     build_async_engine,
     build_session_factory,
@@ -80,6 +83,12 @@ def _required_env(name: str) -> str:
         raise RuntimeError(f"Missing required environment variable: {name}")
 
     return value
+
+
+from enterprise_research.infrastructure.retrieval import (
+    TavilyExtractSettings,
+    TavilyExtractWebContentFetcher,
+)
 
 
 class EnterpriseResearchService:
@@ -113,6 +122,7 @@ class EnterpriseResearchService:
                 research_repository = InMemoryResearchRepository()
                 run_repository = InMemoryResearchRunRepository()
                 plan_repository = InMemoryResearchPlanRepository()
+                document_repository = InMemoryRetrievedDocumentRepository()
 
             elif repository_backend == "postgres":
                 (
@@ -120,6 +130,9 @@ class EnterpriseResearchService:
                     run_repository,
                     plan_repository,
                 ) = await self._build_postgres_repositories()
+                if self._engine is None:
+                    raise RuntimeError("PostgreSQL engine was not initialized.")
+                document_repository = PostgresRetrievedDocumentRepository(build_session_factory(self._engine))
 
             else:
                 raise RuntimeError(
@@ -209,9 +222,72 @@ class EnterpriseResearchService:
                         "Expected 'disabled' or 'tavily'."
                     )
 
+                retrieval_backend = (
+                    os.getenv(
+                        "ENTERPRISE_RESEARCH_RETRIEVAL_BACKEND",
+                        "disabled",
+                    )
+                    .strip()
+                    .lower()
+                )
+
+                if retrieval_backend == "disabled":
+                    retrieval_service = None
+
+                elif retrieval_backend == "tavily-extract":
+                    retrieval_service = ResearchRetrievalService(
+                        research_repository,
+                        run_repository,
+                        document_repository,
+                        TavilyExtractWebContentFetcher(
+                            TavilyExtractSettings(
+                                api_key=_required_env("TAVILY_API_KEY"),
+                                base_url=(
+                                    os.getenv(
+                                        "ENTERPRISE_RESEARCH_RETRIEVAL_BASE_URL",
+                                        "https://api.tavily.com",
+                                    ).strip()
+                                    or "https://api.tavily.com"
+                                ),
+                                extract_depth=os.getenv(
+                                    "ENTERPRISE_RESEARCH_RETRIEVAL_EXTRACT_DEPTH",
+                                    "basic",
+                                )
+                                .strip()
+                                .lower(),
+                                extract_timeout_seconds=float(
+                                    os.getenv(
+                                        "ENTERPRISE_RESEARCH_RETRIEVAL_EXTRACT_TIMEOUT_SECONDS",
+                                        "30",
+                                    )
+                                ),
+                                http_timeout_seconds=float(
+                                    os.getenv(
+                                        "ENTERPRISE_RESEARCH_RETRIEVAL_HTTP_TIMEOUT_SECONDS",
+                                        "60",
+                                    )
+                                ),
+                                max_content_chars=int(
+                                    os.getenv(
+                                        "ENTERPRISE_RESEARCH_RETRIEVAL_MAX_CONTENT_CHARS",
+                                        "1000000",
+                                    )
+                                ),
+                            )
+                        ),
+                    )
+
+                else:
+                    raise RuntimeError(
+                        "Unsupported Enterprise Research retrieval backend: "
+                        f"{retrieval_backend!r}. Expected 'disabled' or "
+                        "'tavily-extract'."
+                    )
+
                 stage_runner = ResearchPipelineStageRunner(
                     planning_service,
                     search_service,
+                    retrieval_service=retrieval_service,
                 )
 
             else:
@@ -262,6 +338,7 @@ class EnterpriseResearchService:
                     "research_runs",
                     "research_plans",
                     "research_plan_questions",
+                    "research_source_documents",
                 )
 
                 for table_name in required_tables:
