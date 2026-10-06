@@ -1,6 +1,10 @@
 """Enterprise Research domain model."""
 
 from enterprise_research.domain.aggregate import ResearchAggregate
+from enterprise_research.domain.document import (
+    RetrievalStatus,
+    RetrievedDocument,
+)
 from enterprise_research.domain.errors import (
     DuplicateEntityError,
     InvalidReportError,
@@ -44,4 +48,6 @@ __all__ = [
     "UnknownClaimError",
     "UnknownEvidenceError",
     "UnknownSourceError",
+    "RetrievalStatus",
+    "RetrievedDocument",
 ]

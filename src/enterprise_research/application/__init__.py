@@ -1,5 +1,8 @@
 """Enterprise Research application layer."""
 
+from enterprise_research.application.document_repository import (
+    RetrievedDocumentRepository,
+)
 from enterprise_research.application.errors import (
     ResearchApplicationError,
     ResearchPlanningError,
@@ -23,6 +26,10 @@ from enterprise_research.application.planning_service import (
 )
 from enterprise_research.application.repository import (
     ResearchRepository,
+)
+from enterprise_research.application.retrieval import (
+    WebContentFetcher,
+    WebFetchResult,
 )
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
@@ -62,4 +69,7 @@ __all__ = [
     "SearchProvider",
     "SearchResult",
     "canonicalize_url",
+    "RetrievedDocumentRepository",
+    "WebContentFetcher",
+    "WebFetchResult",
 ]
