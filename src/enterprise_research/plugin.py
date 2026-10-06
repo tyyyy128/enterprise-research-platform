@@ -70,6 +70,10 @@ from enterprise_research.infrastructure.postgres import (
 from enterprise_research.infrastructure.postgres.plan_repository import (
     PostgresResearchPlanRepository,
 )
+from enterprise_research.infrastructure.retrieval import (
+    TavilyExtractSettings,
+    TavilyExtractWebContentFetcher,
+)
 from enterprise_research.infrastructure.searching import (
     TavilySearchProvider,
     TavilySearchSettings,
@@ -83,12 +87,6 @@ def _required_env(name: str) -> str:
         raise RuntimeError(f"Missing required environment variable: {name}")
 
     return value
-
-
-from enterprise_research.infrastructure.retrieval import (
-    TavilyExtractSettings,
-    TavilyExtractWebContentFetcher,
-)
 
 
 class EnterpriseResearchService:

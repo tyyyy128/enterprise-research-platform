@@ -1,5 +1,9 @@
 """Enterprise Research application layer."""
 
+from enterprise_research.application.document_chunking import (
+    DocumentChunkingSettings,
+    chunk_document,
+)
 from enterprise_research.application.document_repository import (
     RetrievedDocumentRepository,
 )
@@ -10,6 +14,11 @@ from enterprise_research.application.errors import (
     ResearchRunNotFoundError,
     ResearchSearchError,
     ResearchTaskNotFoundError,
+)
+from enterprise_research.application.evidence_extraction import (
+    DocumentChunk,
+    EvidenceCandidate,
+    EvidenceExtractor,
 )
 from enterprise_research.application.executor import (
     ResearchRunExecutor,
@@ -80,4 +89,9 @@ __all__ = [
     "ResearchRetrievalError",
     "ResearchRetrievalService",
     "RetrievalSummary",
+    "DocumentChunk",
+    "DocumentChunkingSettings",
+    "EvidenceCandidate",
+    "EvidenceExtractor",
+    "chunk_document",
 ]
