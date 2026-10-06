@@ -9,6 +9,7 @@ from deerflow_extension_api import (
     HostPolicySnapshot,
 )
 
+import enterprise_research.plugin as plugin_module
 from enterprise_research.plugin import (
     EnterpriseResearchService,
 )
@@ -88,6 +89,21 @@ def configure_real_planner(
     monkeypatch.setenv(
         "ENTERPRISE_RESEARCH_EVIDENCE_CHUNK_OVERLAP_CHARS",
         "1000",
+    )
+
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_EVIDENCE_MAX_DOCUMENTS",
+        "4",
+    )
+
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CHUNKS_PER_DOCUMENT",
+        "8",
+    )
+
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_EVIDENCE_MAX_TOTAL_CHUNKS",
+        "24",
     )
 
 
@@ -182,6 +198,140 @@ def test_runtime_requires_evidence_credentials(
         with pytest.raises(
             RuntimeError,
             match=("ENTERPRISE_RESEARCH_EVIDENCE_API_KEY"),
+        ):
+            await service.start(create_runtime_deps())
+
+    asyncio.run(run())
+
+
+def test_runtime_applies_evidence_workload_budget_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        configure_real_planner(monkeypatch)
+
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_BACKEND",
+            "openai-compatible",
+        )
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_BASE_URL",
+            "https://example.test/v1",
+        )
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_API_KEY",
+            "evidence-secret",
+        )
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_MODEL",
+            "test-evidence",
+        )
+
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_DOCUMENTS",
+            "2",
+        )
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CHUNKS_PER_DOCUMENT",
+            "3",
+        )
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_TOTAL_CHUNKS",
+            "5",
+        )
+
+        captured: dict[str, int] = {}
+        sentinel = object()
+
+        def build_settings(
+            *,
+            max_documents: int,
+            max_chunks_per_document: int,
+            max_total_chunks: int,
+        ) -> object:
+            captured.update(
+                max_documents=(max_documents),
+                max_chunks_per_document=(max_chunks_per_document),
+                max_total_chunks=(max_total_chunks),
+            )
+
+            return sentinel
+
+        monkeypatch.setattr(
+            plugin_module,
+            "EvidenceWorkloadSettings",
+            build_settings,
+        )
+
+        service = EnterpriseResearchService()
+
+        await service.start(create_runtime_deps())
+
+        try:
+            assert captured == {
+                "max_documents": 2,
+                "max_chunks_per_document": 3,
+                "max_total_chunks": 5,
+            }
+
+        finally:
+            await service.stop()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        (
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_DOCUMENTS",
+            "0",
+        ),
+        (
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CHUNKS_PER_DOCUMENT",
+            "-1",
+        ),
+        (
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_TOTAL_CHUNKS",
+            "not-an-int",
+        ),
+    ],
+)
+def test_runtime_rejects_invalid_evidence_workload_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+) -> None:
+    async def run() -> None:
+        configure_real_planner(monkeypatch)
+
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_BACKEND",
+            "openai-compatible",
+        )
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_BASE_URL",
+            "https://example.test/v1",
+        )
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_API_KEY",
+            "evidence-secret",
+        )
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_MODEL",
+            "test-evidence",
+        )
+
+        monkeypatch.setenv(
+            name,
+            value,
+        )
+
+        service = EnterpriseResearchService()
+
+        with pytest.raises(
+            RuntimeError,
+            match=("Enterprise Research evidence numeric settings are invalid"),
         ):
             await service.start(create_runtime_deps())
 

@@ -44,6 +44,9 @@ from enterprise_research.application.document_chunking import (
 from enterprise_research.application.evidence_extraction_service import (
     ResearchEvidenceExtractionService,
 )
+from enterprise_research.application.evidence_workload import (
+    EvidenceWorkloadSettings,
+)
 from enterprise_research.domain import (
     Claim,
     Evidence,
@@ -348,6 +351,33 @@ class EnterpriseResearchService:
                             )
                         )
 
+                        evidence_max_documents = int(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_MAX_DOCUMENTS",
+                                "4",
+                            )
+                        )
+
+                        evidence_max_chunks_per_document = int(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CHUNKS_PER_DOCUMENT",
+                                "8",
+                            )
+                        )
+
+                        evidence_max_total_chunks = int(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_MAX_TOTAL_CHUNKS",
+                                "24",
+                            )
+                        )
+
+                        evidence_workload_settings = EvidenceWorkloadSettings(
+                            max_documents=evidence_max_documents,
+                            max_chunks_per_document=(evidence_max_chunks_per_document),
+                            max_total_chunks=evidence_max_total_chunks,
+                        )
+
                     except ValueError as exc:
                         raise RuntimeError("Enterprise Research evidence numeric settings are invalid.") from exc
 
@@ -373,6 +403,7 @@ class EnterpriseResearchService:
                                 overlap_chars=(evidence_chunk_overlap_chars),
                             )
                         ),
+                        workload_settings=evidence_workload_settings,
                     )
 
                 else:
