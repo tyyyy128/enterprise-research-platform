@@ -20,6 +20,11 @@ from enterprise_research.application.evidence_extraction import (
     EvidenceCandidate,
     EvidenceExtractor,
 )
+from enterprise_research.application.evidence_progress import (
+    EvidenceExtractionProgress,
+    EvidenceProgressCallback,
+    emit_evidence_progress,
+)
 from enterprise_research.application.evidence_verification import (
     VerifiedEvidenceCandidate,
     verify_evidence_candidate,
@@ -100,4 +105,7 @@ __all__ = [
     "chunk_document",
     "VerifiedEvidenceCandidate",
     "verify_evidence_candidate",
+    "EvidenceExtractionProgress",
+    "EvidenceProgressCallback",
+    "emit_evidence_progress",
 ]
