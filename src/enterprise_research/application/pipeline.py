@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from enterprise_research.application.evidence_extraction_service import (
+    ResearchEvidenceExtractionService,
+)
 from enterprise_research.application.planning_service import (
     ResearchPlanningService,
 )
@@ -24,10 +27,12 @@ class ResearchPipelineStageRunner:
         planning_service: ResearchPlanningService,
         search_service: ResearchSearchService | None = None,
         retrieval_service: ResearchRetrievalService | None = None,
+        evidence_extraction_service: (ResearchEvidenceExtractionService | None) = None,
     ) -> None:
         self._planning_service = planning_service
         self._search_service = search_service
         self._retrieval_service = retrieval_service
+        self._evidence_extraction_service = evidence_extraction_service
 
     async def run_stage(
         self,
@@ -52,6 +57,13 @@ class ResearchPipelineStageRunner:
 
         if stage == ResearchRunStatus.EXTRACTING and self._retrieval_service is not None:
             await self._retrieval_service.retrieve_run(
+                task_id,
+                run_id,
+            )
+            return
+
+        if stage == ResearchRunStatus.VERIFYING and self._evidence_extraction_service is not None:
+            await self._evidence_extraction_service.extract_run(
                 task_id,
                 run_id,
             )
