@@ -20,6 +20,9 @@ from enterprise_research.application.evidence_extraction_service import (
     EvidenceExtractionSummary,
     ResearchEvidenceExtractionService,
 )
+from enterprise_research.application.evidence_workload import (
+    EvidenceWorkloadSettings,
+)
 from enterprise_research.application.run_service import (
     ResearchRunApplicationService,
 )
@@ -182,6 +185,7 @@ def build_service(
     *,
     chunk_size_chars: int = 100,
     overlap_chars: int = 0,
+    workload_settings: EvidenceWorkloadSettings | None = None,
 ) -> ResearchEvidenceExtractionService:
     return ResearchEvidenceExtractionService(
         setup.research_repository,
@@ -191,10 +195,11 @@ def build_service(
         extractor,
         chunking_settings=(
             DocumentChunkingSettings(
-                chunk_size_chars=(chunk_size_chars),
-                overlap_chars=(overlap_chars),
+                chunk_size_chars=chunk_size_chars,
+                overlap_chars=overlap_chars,
             )
         ),
+        workload_settings=workload_settings,
     )
 
 
@@ -228,7 +233,10 @@ def test_verified_candidate_becomes_evidence_with_absolute_locator() -> None:
         assert summary == (
             EvidenceExtractionSummary(
                 eligible_document_count=1,
-                chunk_count=1,
+                selected_document_count=1,
+                available_chunk_count=1,
+                scheduled_chunk_count=1,
+                skipped_chunk_count=0,
                 candidate_count=1,
                 verified_count=1,
                 rejected_count=0,
@@ -411,5 +419,52 @@ def test_wrong_run_state_is_rejected_before_model_call() -> None:
             )
 
         assert extractor.calls == []
+
+    asyncio.run(run_test())
+
+
+def test_workload_budget_caps_chunks_before_model_call() -> None:
+    async def run_test() -> None:
+        setup = await setup_run(content="abcdefghijklmnopqrstuvwxyz")
+
+        extractor = StaticEvidenceExtractor(lambda _chunk: [])
+
+        service = build_service(
+            setup,
+            extractor,
+            chunk_size_chars=4,
+            overlap_chars=0,
+            workload_settings=(
+                EvidenceWorkloadSettings(
+                    max_documents=1,
+                    max_chunks_per_document=3,
+                    max_total_chunks=2,
+                )
+            ),
+        )
+
+        summary = await service.extract_run(
+            setup.aggregate.task.task_id,
+            setup.run.run_id,
+        )
+
+        assert [chunk.index for chunk in extractor.calls] == [
+            0,
+            1,
+        ]
+
+        assert summary.eligible_document_count == 1
+
+        assert summary.selected_document_count == 1
+
+        assert summary.available_chunk_count == 7
+
+        assert summary.scheduled_chunk_count == 2
+
+        assert summary.skipped_chunk_count == 5
+
+        assert summary.candidate_count == 0
+
+        assert summary.created_count == 0
 
     asyncio.run(run_test())
