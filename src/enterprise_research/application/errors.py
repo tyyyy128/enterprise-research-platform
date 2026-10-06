@@ -19,3 +19,7 @@ class ResearchPlanningError(ResearchApplicationError):
 
 class ResearchSearchError(ResearchApplicationError):
     """Raised when automated research search cannot complete safely."""
+
+
+class ResearchRetrievalError(ResearchApplicationError):
+    """Raised when research source retrieval cannot proceed safely."""

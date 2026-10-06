@@ -6,6 +6,7 @@ from enterprise_research.application.document_repository import (
 from enterprise_research.application.errors import (
     ResearchApplicationError,
     ResearchPlanningError,
+    ResearchRetrievalError,
     ResearchRunNotFoundError,
     ResearchSearchError,
     ResearchTaskNotFoundError,
@@ -30,6 +31,10 @@ from enterprise_research.application.repository import (
 from enterprise_research.application.retrieval import (
     WebContentFetcher,
     WebFetchResult,
+)
+from enterprise_research.application.retrieval_service import (
+    ResearchRetrievalService,
+    RetrievalSummary,
 )
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
@@ -72,4 +77,7 @@ __all__ = [
     "RetrievedDocumentRepository",
     "WebContentFetcher",
     "WebFetchResult",
+    "ResearchRetrievalError",
+    "ResearchRetrievalService",
+    "RetrievalSummary",
 ]
