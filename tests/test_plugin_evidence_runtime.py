@@ -106,6 +106,11 @@ def configure_real_planner(
         "24",
     )
 
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CONCURRENCY",
+        "4",
+    )
+
 
 def test_runtime_accepts_openai_compatible_evidence_backend(
     monkeypatch: pytest.MonkeyPatch,
@@ -324,6 +329,157 @@ def test_runtime_rejects_invalid_evidence_workload_budget(
 
         monkeypatch.setenv(
             name,
+            value,
+        )
+
+        service = EnterpriseResearchService()
+
+        with pytest.raises(
+            RuntimeError,
+            match=("Enterprise Research evidence numeric settings are invalid"),
+        ):
+            await service.start(create_runtime_deps())
+
+    asyncio.run(run())
+
+
+def _configure_evidence_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_real_planner(monkeypatch)
+
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_EVIDENCE_BACKEND",
+        "openai-compatible",
+    )
+
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_EVIDENCE_BASE_URL",
+        "https://example.test/v1",
+    )
+
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_EVIDENCE_API_KEY",
+        "evidence-secret",
+    )
+
+    monkeypatch.setenv(
+        "ENTERPRISE_RESEARCH_EVIDENCE_MODEL",
+        "test-evidence",
+    )
+
+
+def test_runtime_uses_default_evidence_max_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        _configure_evidence_backend(monkeypatch)
+
+        monkeypatch.delenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CONCURRENCY",
+            raising=False,
+        )
+
+        captured: dict[str, int] = {}
+
+        original_service = plugin_module.ResearchEvidenceExtractionService
+
+        def build_service(
+            *args,
+            max_concurrency: int,
+            **kwargs,
+        ):
+            captured["max_concurrency"] = max_concurrency
+
+            return original_service(
+                *args,
+                max_concurrency=(max_concurrency),
+                **kwargs,
+            )
+
+        monkeypatch.setattr(
+            plugin_module,
+            "ResearchEvidenceExtractionService",
+            build_service,
+        )
+
+        service = EnterpriseResearchService()
+
+        await service.start(create_runtime_deps())
+
+        try:
+            assert captured == {"max_concurrency": 4}
+
+        finally:
+            await service.stop()
+
+    asyncio.run(run())
+
+
+def test_runtime_applies_custom_evidence_max_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        _configure_evidence_backend(monkeypatch)
+
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CONCURRENCY",
+            "3",
+        )
+
+        captured: dict[str, int] = {}
+
+        original_service = plugin_module.ResearchEvidenceExtractionService
+
+        def build_service(
+            *args,
+            max_concurrency: int,
+            **kwargs,
+        ):
+            captured["max_concurrency"] = max_concurrency
+
+            return original_service(
+                *args,
+                max_concurrency=(max_concurrency),
+                **kwargs,
+            )
+
+        monkeypatch.setattr(
+            plugin_module,
+            "ResearchEvidenceExtractionService",
+            build_service,
+        )
+
+        service = EnterpriseResearchService()
+
+        await service.start(create_runtime_deps())
+
+        try:
+            assert captured == {"max_concurrency": 3}
+
+        finally:
+            await service.stop()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0",
+        "-1",
+        "not-an-int",
+    ],
+)
+def test_runtime_rejects_invalid_evidence_max_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    async def run() -> None:
+        _configure_evidence_backend(monkeypatch)
+
+        monkeypatch.setenv(
+            "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CONCURRENCY",
             value,
         )
 

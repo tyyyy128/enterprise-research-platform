@@ -372,6 +372,16 @@ class EnterpriseResearchService:
                             )
                         )
 
+                        evidence_max_concurrency = int(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CONCURRENCY",
+                                "4",
+                            )
+                        )
+
+                        if evidence_max_concurrency < 1:
+                            raise ValueError("evidence max concurrency must be at least 1.")
+
                         evidence_workload_settings = EvidenceWorkloadSettings(
                             max_documents=evidence_max_documents,
                             max_chunks_per_document=(evidence_max_chunks_per_document),
@@ -404,6 +414,7 @@ class EnterpriseResearchService:
                             )
                         ),
                         workload_settings=evidence_workload_settings,
+                        max_concurrency=evidence_max_concurrency,
                     )
 
                 else:
