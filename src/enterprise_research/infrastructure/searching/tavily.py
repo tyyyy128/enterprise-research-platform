@@ -105,7 +105,7 @@ class _TavilyResponsePayload(BaseModel):
     results: list[_TavilyResultPayload] = Field(default_factory=list)
 
     request_id: str | None = None
-    response_time: str | None = None
+    response_time: float | str | None = None
 
 
 class TavilySearchProvider:
@@ -217,7 +217,11 @@ class TavilySearchProvider:
             return _TavilyResponsePayload.model_validate(raw)
 
         except ValidationError as exc:
-            raise TavilySearchAdapterError("Tavily returned an invalid search response.") from exc
+            details = "; ".join(
+                f"{'.'.join(str(part) for part in issue['loc'])}: {issue['msg']}" for issue in exc.errors()
+            )
+
+            raise TavilySearchAdapterError(f"Tavily returned an invalid search response: {details}") from exc
 
 
 def _result_metadata(

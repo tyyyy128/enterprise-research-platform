@@ -72,7 +72,7 @@ def test_success_maps_request_and_results() -> None:
                         },
                     ],
                     "request_id": "request-1",
-                    "response_time": "0.42",
+                    "response_time": 0.42,
                 },
             )
 
