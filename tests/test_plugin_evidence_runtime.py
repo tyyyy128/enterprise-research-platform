@@ -122,7 +122,7 @@ def test_runtime_accepts_openai_compatible_evidence_backend(
         await service.start(create_runtime_deps())
 
         try:
-            assert service.require_application() is not None
+            assert await service.require_application() is not None
         finally:
             await service.stop()
 
