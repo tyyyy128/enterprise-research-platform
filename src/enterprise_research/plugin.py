@@ -33,6 +33,7 @@ from enterprise_research.application import (
     ResearchRunApplicationService,
     ResearchRunExecutor,
     ResearchRunNotFoundError,
+    ResearchSearchService,
     ResearchTaskNotFoundError,
     SkeletonResearchStageRunner,
 )
@@ -65,6 +66,10 @@ from enterprise_research.infrastructure.postgres import (
 )
 from enterprise_research.infrastructure.postgres.plan_repository import (
     PostgresResearchPlanRepository,
+)
+from enterprise_research.infrastructure.searching import (
+    TavilySearchProvider,
+    TavilySearchSettings,
 )
 
 
@@ -140,7 +145,19 @@ class EnterpriseResearchService:
                 .lower()
             )
 
+            search_backend = (
+                os.getenv(
+                    "ENTERPRISE_RESEARCH_SEARCH_BACKEND",
+                    "disabled",
+                )
+                .strip()
+                .lower()
+            )
+
             if planner_backend == "disabled":
+                if search_backend != "disabled":
+                    raise RuntimeError("Enterprise Research search requires a real planner backend.")
+
                 stage_runner = SkeletonResearchStageRunner()
 
             elif planner_backend == "openai-compatible":
@@ -159,7 +176,43 @@ class EnterpriseResearchService:
                     planner,
                 )
 
-                stage_runner = ResearchPipelineStageRunner(planning_service)
+                if search_backend == "disabled":
+                    search_service = None
+
+                elif search_backend == "tavily":
+                    raw_max_results = os.getenv(
+                        "ENTERPRISE_RESEARCH_SEARCH_MAX_RESULTS",
+                        "5",
+                    ).strip()
+
+                    try:
+                        max_results = int(raw_max_results)
+                    except ValueError as exc:
+                        raise RuntimeError("ENTERPRISE_RESEARCH_SEARCH_MAX_RESULTS must be an integer.") from exc
+
+                    if not 1 <= max_results <= 20:
+                        raise RuntimeError("ENTERPRISE_RESEARCH_SEARCH_MAX_RESULTS must be between 1 and 20.")
+
+                    search_service = ResearchSearchService(
+                        research_repository,
+                        run_repository,
+                        plan_repository,
+                        TavilySearchProvider(TavilySearchSettings(api_key=_required_env("TAVILY_API_KEY"))),
+                        max_results_per_question=(max_results),
+                    )
+
+                else:
+                    raise RuntimeError(
+                        "Unsupported Enterprise Research "
+                        "search backend: "
+                        f"{search_backend!r}. "
+                        "Expected 'disabled' or 'tavily'."
+                    )
+
+                stage_runner = ResearchPipelineStageRunner(
+                    planning_service,
+                    search_service,
+                )
 
             else:
                 raise RuntimeError(
