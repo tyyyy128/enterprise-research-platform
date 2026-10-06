@@ -186,6 +186,7 @@ def build_service(
     chunk_size_chars: int = 100,
     overlap_chars: int = 0,
     workload_settings: EvidenceWorkloadSettings | None = None,
+    max_concurrency: int = 4,
 ) -> ResearchEvidenceExtractionService:
     return ResearchEvidenceExtractionService(
         setup.research_repository,
@@ -200,6 +201,7 @@ def build_service(
             )
         ),
         workload_settings=workload_settings,
+        max_concurrency=max_concurrency,
     )
 
 
@@ -468,3 +470,92 @@ def test_workload_budget_caps_chunks_before_model_call() -> None:
         assert summary.created_count == 0
 
     asyncio.run(run_test())
+
+
+class ConcurrencyTrackingEvidenceExtractor:
+    """Track simultaneous extractor calls."""
+
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+
+    async def extract(
+        self,
+        *,
+        task,
+        run,
+        plan,
+        source,
+        chunk,
+    ):
+        del (
+            task,
+            run,
+            plan,
+            source,
+            chunk,
+        )
+
+        self.active += 1
+
+        self.max_active = max(
+            self.max_active,
+            self.active,
+        )
+
+        try:
+            await asyncio.sleep(0.01)
+            return []
+
+        finally:
+            self.active -= 1
+
+
+def test_bounded_concurrency_caps_simultaneous_model_calls() -> None:
+    async def run_test() -> None:
+        setup = await setup_run(content=("abcdefghijklmnopqrstuvwx"))
+
+        extractor = ConcurrencyTrackingEvidenceExtractor()
+
+        service = build_service(
+            setup,
+            extractor,
+            chunk_size_chars=4,
+            overlap_chars=0,
+            workload_settings=(
+                EvidenceWorkloadSettings(
+                    max_documents=1,
+                    max_chunks_per_document=6,
+                    max_total_chunks=6,
+                )
+            ),
+            max_concurrency=2,
+        )
+
+        summary = await service.extract_run(
+            setup.aggregate.task.task_id,
+            setup.run.run_id,
+        )
+
+        assert extractor.max_active == 2
+
+        assert summary.scheduled_chunk_count == 6
+
+        assert summary.candidate_count == 0
+
+    asyncio.run(run_test())
+
+
+def test_rejects_non_positive_max_concurrency() -> None:
+    with pytest.raises(
+        ValueError,
+        match=("max_concurrency must be at least 1"),
+    ):
+        ResearchEvidenceExtractionService(
+            object(),
+            object(),
+            object(),
+            object(),
+            object(),
+            max_concurrency=0,
+        )

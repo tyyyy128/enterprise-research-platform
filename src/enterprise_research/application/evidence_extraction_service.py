@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -77,6 +78,7 @@ class ResearchEvidenceExtractionService:
         *,
         chunking_settings: DocumentChunkingSettings | None = None,
         workload_settings: EvidenceWorkloadSettings | None = None,
+        max_concurrency: int = 4,
     ) -> None:
         self._research_repository = research_repository
         self._run_repository = run_repository
@@ -85,6 +87,10 @@ class ResearchEvidenceExtractionService:
         self._extractor = extractor
         self._chunking_settings = chunking_settings or DocumentChunkingSettings()
         self._workload_settings = workload_settings or EvidenceWorkloadSettings()
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be at least 1.")
+
+        self._max_concurrency = max_concurrency
 
     async def extract_run(
         self,
@@ -201,20 +207,43 @@ class ResearchEvidenceExtractionService:
         # 只有 workload planner 选中的 chunk
         # 才有资格调用 Evidence LLM。
         #
-        for item in workload.items:
+        semaphore = asyncio.Semaphore(self._max_concurrency)
+
+        async def extract_item(item):
             source = source_by_id.get(item.source_id)
 
             if source is None:
                 raise ResearchEvidenceExtractionError("Evidence workload referenced an unknown research source.")
 
-            candidates = await self._extractor.extract(
-                task=aggregate.task,
-                run=run,
-                plan=plan,
-                source=source,
-                chunk=item.chunk,
+            async with semaphore:
+                candidates = await self._extractor.extract(
+                    task=aggregate.task,
+                    run=run,
+                    plan=plan,
+                    source=source,
+                    chunk=item.chunk,
+                )
+
+            return item, source, candidates
+
+        extraction_tasks = [asyncio.create_task(extract_item(item)) for item in workload.items]
+
+        try:
+            extraction_results = await asyncio.gather(*extraction_tasks)
+
+        except BaseException:
+            for task in extraction_tasks:
+                if not task.done():
+                    task.cancel()
+
+            await asyncio.gather(
+                *extraction_tasks,
+                return_exceptions=True,
             )
 
+            raise
+
+        for item, source, candidates in extraction_results:
             candidate_count += len(candidates)
 
             for candidate in candidates:
