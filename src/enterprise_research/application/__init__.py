@@ -20,6 +20,10 @@ from enterprise_research.application.evidence_extraction import (
     EvidenceCandidate,
     EvidenceExtractor,
 )
+from enterprise_research.application.evidence_verification import (
+    VerifiedEvidenceCandidate,
+    verify_evidence_candidate,
+)
 from enterprise_research.application.executor import (
     ResearchRunExecutor,
     ResearchStageRunner,
@@ -94,4 +98,6 @@ __all__ = [
     "EvidenceCandidate",
     "EvidenceExtractor",
     "chunk_document",
+    "VerifiedEvidenceCandidate",
+    "verify_evidence_candidate",
 ]
