@@ -46,6 +46,7 @@ class TavilySearchSettings:
     timeout_seconds: float = 30.0
 
     include_published_date: bool = False
+    min_score: float = 0.05
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -71,6 +72,9 @@ class TavilySearchSettings:
 
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero.")
+
+        if self.min_score < 0:
+            raise ValueError("min_score must be non-negative.")
 
     @property
     def search_url(self) -> str:
@@ -201,6 +205,7 @@ class TavilySearchProvider:
                 ),
             )
             for result in payload.results[:max_results]
+            if (result.score is None or result.score >= self._settings.min_score)
         ]
 
     @staticmethod

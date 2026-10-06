@@ -313,3 +313,69 @@ def test_settings_validate_configuration() -> None:
             api_key="secret",
             topic="bogus",  # type: ignore[arg-type]
         )
+
+
+def test_min_score_filters_low_relevance_results() -> None:
+    async def run() -> None:
+        def handler(
+            request: httpx.Request,
+        ) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Low relevance",
+                            "url": ("https://example.com/low"),
+                            "content": "low",
+                            "score": 0.011,
+                        },
+                        {
+                            "title": "At threshold",
+                            "url": ("https://example.com/edge"),
+                            "content": "edge",
+                            "score": 0.05,
+                        },
+                        {
+                            "title": "High relevance",
+                            "url": ("https://example.com/high"),
+                            "content": "high",
+                            "score": 0.60,
+                        },
+                        {
+                            "title": "Unscored",
+                            "url": ("https://example.com/unscored"),
+                            "content": "unscored",
+                        },
+                    ],
+                    "response_time": 0.1,
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+        provider = TavilySearchProvider(
+            TavilySearchSettings(
+                api_key="tvly-secret",
+                base_url="https://example.test",
+                min_score=0.05,
+            ),
+            client=client,
+        )
+
+        try:
+            results = await provider.search(
+                "LangGraph reliability",
+                max_results=5,
+            )
+
+        finally:
+            await client.aclose()
+
+        assert [result.title for result in results] == [
+            "At threshold",
+            "High relevance",
+            "Unscored",
+        ]
+
+    asyncio.run(run())
