@@ -181,7 +181,12 @@ class OpenAICompatibleEvidenceExtractor:
             "messages": [
                 {
                     "role": "system",
-                    "content": _SYSTEM_PROMPT,
+                    "content": (
+                        _SYSTEM_PROMPT
+                        + "\n\nOutput limits:\n"
+                        + (f"- Return at most {self._settings.max_candidates_per_chunk} evidence items.\n")
+                        + (f"- Each evidence excerpt must be at most {self._settings.max_excerpt_chars} characters.")
+                    ),
                 },
                 {
                     "role": "user",

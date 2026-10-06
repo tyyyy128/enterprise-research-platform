@@ -439,3 +439,65 @@ def test_settings_validate_bounds() -> None:
             model="glm-4",
             max_excerpt_chars=0,
         )
+
+
+def test_request_includes_configured_output_limits() -> None:
+    async def run_test() -> None:
+        seen: dict[
+            str,
+            object,
+        ] = {}
+
+        def handler(
+            request: httpx.Request,
+        ) -> httpx.Response:
+            seen["body"] = json.loads(request.content)
+
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": (json.dumps({"evidence": []}))}}]},
+            )
+
+        extractor, client = create_extractor(
+            httpx.MockTransport(handler),
+            max_candidates_per_chunk=3,
+            max_excerpt_chars=321,
+        )
+
+        args = build_inputs()
+
+        try:
+            result = await extractor.extract(
+                task=args[0],
+                run=args[1],
+                plan=args[2],
+                source=args[3],
+                chunk=args[4],
+            )
+
+        finally:
+            await client.aclose()
+
+        assert result == []
+
+        body = seen["body"]
+
+        assert isinstance(
+            body,
+            dict,
+        )
+
+        messages = body["messages"]
+
+        assert isinstance(
+            messages,
+            list,
+        )
+
+        system_prompt = messages[0]["content"]
+
+        assert "Return at most 3 evidence items." in system_prompt
+
+        assert "Each evidence excerpt must be at most 321 characters." in system_prompt
+
+    asyncio.run(run_test())
