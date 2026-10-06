@@ -38,6 +38,12 @@ from enterprise_research.application import (
     ResearchTaskNotFoundError,
     SkeletonResearchStageRunner,
 )
+from enterprise_research.application.document_chunking import (
+    DocumentChunkingSettings,
+)
+from enterprise_research.application.evidence_extraction_service import (
+    ResearchEvidenceExtractionService,
+)
 from enterprise_research.domain import (
     Claim,
     Evidence,
@@ -51,6 +57,10 @@ from enterprise_research.infrastructure import (
     InMemoryResearchRepository,
     InMemoryResearchRunRepository,
     InMemoryRetrievedDocumentRepository,
+)
+from enterprise_research.infrastructure.evidence_extraction import (
+    OpenAICompatibleEvidenceExtractor,
+    OpenAICompatibleEvidenceExtractorSettings,
 )
 from enterprise_research.infrastructure.memory_plan_repository import (
     InMemoryResearchPlanRepository,
@@ -282,10 +292,103 @@ class EnterpriseResearchService:
                         "'tavily-extract'."
                     )
 
+                evidence_backend = (
+                    os.getenv(
+                        "ENTERPRISE_RESEARCH_EVIDENCE_BACKEND",
+                        "disabled",
+                    )
+                    .strip()
+                    .lower()
+                )
+
+                if evidence_backend == "disabled":
+                    evidence_extraction_service = None
+
+                elif evidence_backend == "openai-compatible":
+                    try:
+                        evidence_temperature = float(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_TEMPERATURE",
+                                "0",
+                            )
+                        )
+
+                        evidence_timeout_seconds = float(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_TIMEOUT_SECONDS",
+                                "60",
+                            )
+                        )
+
+                        evidence_max_candidates = int(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CANDIDATES_PER_CHUNK",
+                                "6",
+                            )
+                        )
+
+                        evidence_max_excerpt_chars = int(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_MAX_EXCERPT_CHARS",
+                                "2000",
+                            )
+                        )
+
+                        evidence_chunk_size_chars = int(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_CHUNK_SIZE_CHARS",
+                                "20000",
+                            )
+                        )
+
+                        evidence_chunk_overlap_chars = int(
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_CHUNK_OVERLAP_CHARS",
+                                "1000",
+                            )
+                        )
+
+                    except ValueError as exc:
+                        raise RuntimeError("Enterprise Research evidence numeric settings are invalid.") from exc
+
+                    evidence_extraction_service = ResearchEvidenceExtractionService(
+                        research_repository,
+                        run_repository,
+                        plan_repository,
+                        document_repository,
+                        OpenAICompatibleEvidenceExtractor(
+                            OpenAICompatibleEvidenceExtractorSettings(
+                                base_url=_required_env("ENTERPRISE_RESEARCH_EVIDENCE_BASE_URL"),
+                                api_key=_required_env("ENTERPRISE_RESEARCH_EVIDENCE_API_KEY"),
+                                model=_required_env("ENTERPRISE_RESEARCH_EVIDENCE_MODEL"),
+                                temperature=(evidence_temperature),
+                                timeout_seconds=(evidence_timeout_seconds),
+                                max_candidates_per_chunk=(evidence_max_candidates),
+                                max_excerpt_chars=(evidence_max_excerpt_chars),
+                            )
+                        ),
+                        chunking_settings=(
+                            DocumentChunkingSettings(
+                                chunk_size_chars=(evidence_chunk_size_chars),
+                                overlap_chars=(evidence_chunk_overlap_chars),
+                            )
+                        ),
+                    )
+
+                else:
+                    raise RuntimeError(
+                        "Unsupported Enterprise Research "
+                        "evidence backend: "
+                        f"{evidence_backend!r}. "
+                        "Expected 'disabled' or "
+                        "'openai-compatible'."
+                    )
+
                 stage_runner = ResearchPipelineStageRunner(
                     planning_service,
                     search_service,
                     retrieval_service=retrieval_service,
+                    evidence_extraction_service=evidence_extraction_service,
                 )
 
             else:
