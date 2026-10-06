@@ -4,6 +4,7 @@ from enterprise_research.application.errors import (
     ResearchApplicationError,
     ResearchPlanningError,
     ResearchRunNotFoundError,
+    ResearchSearchError,
     ResearchTaskNotFoundError,
 )
 from enterprise_research.application.executor import (
@@ -29,6 +30,14 @@ from enterprise_research.application.run_repository import (
 from enterprise_research.application.run_service import (
     ResearchRunApplicationService,
 )
+from enterprise_research.application.search import (
+    SearchProvider,
+    SearchResult,
+)
+from enterprise_research.application.search_service import (
+    ResearchSearchService,
+    canonicalize_url,
+)
 from enterprise_research.application.service import (
     ResearchApplicationService,
 )
@@ -48,4 +57,9 @@ __all__ = [
     "ResearchStageRunner",
     "ResearchTaskNotFoundError",
     "SkeletonResearchStageRunner",
+    "ResearchSearchError",
+    "ResearchSearchService",
+    "SearchProvider",
+    "SearchResult",
+    "canonicalize_url",
 ]

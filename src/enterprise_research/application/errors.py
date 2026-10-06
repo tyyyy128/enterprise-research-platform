@@ -15,3 +15,7 @@ class ResearchRunNotFoundError(ResearchApplicationError):
 
 class ResearchPlanningError(ResearchApplicationError):
     """Raised when research planning cannot be completed safely."""
+
+
+class ResearchSearchError(ResearchApplicationError):
+    """Raised when automated research search cannot complete safely."""
