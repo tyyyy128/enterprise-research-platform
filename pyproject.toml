@@ -9,8 +9,9 @@ dependencies = [
     "deerflow-extension-api>=0.2,<0.3",
     "fastapi>=0.115,<1",
     "pydantic>=2.13,<3",
-    "sqlalchemy[asyncio]>=2.0,<3",
     "httpx>=0.28,<1",
+    "sqlalchemy>=2.0,<3",
+    "psycopg[binary]>=3.2,<4",
 ]
 
 [project.entry-points."deerflow.extensions"]
