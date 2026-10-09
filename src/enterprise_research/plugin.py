@@ -7,7 +7,8 @@ from typing import Any
 from uuid import UUID
 
 from deerflow_extension_api import ExtensionRuntimeDeps
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -26,6 +27,7 @@ from enterprise_research.api import (
     SourceResponse,
     SupportClaimRequest,
 )
+from enterprise_research.api.sse import encode_run_event
 from enterprise_research.application import (
     ResearchApplicationService,
     ResearchPipelineStageRunner,
@@ -46,6 +48,10 @@ from enterprise_research.application.evidence_extraction_service import (
 )
 from enterprise_research.application.evidence_workload import (
     EvidenceWorkloadSettings,
+)
+from enterprise_research.application.run_events import (
+    ResearchRunEventBus,
+    RunEventHistoryExpired,
 )
 from enterprise_research.domain import (
     Claim,
@@ -110,6 +116,7 @@ class EnterpriseResearchService:
         self._application: ResearchApplicationService | None = None
         self._run_application: ResearchRunApplicationService | None = None
         self._run_executor: ResearchRunExecutor | None = None
+        self._run_event_bus: ResearchRunEventBus | None = None
         self._engine: AsyncEngine | None = None
 
     async def start(
@@ -159,6 +166,8 @@ class EnterpriseResearchService:
                 research_repository,
                 run_repository,
             )
+
+            run_event_bus = ResearchRunEventBus()
 
             planner_backend = (
                 os.getenv(
@@ -431,6 +440,7 @@ class EnterpriseResearchService:
                     search_service,
                     retrieval_service=retrieval_service,
                     evidence_extraction_service=evidence_extraction_service,
+                    evidence_progress_callback=run_event_bus.publish_evidence_progress,
                 )
 
             else:
@@ -445,6 +455,7 @@ class EnterpriseResearchService:
             run_executor = ResearchRunExecutor(
                 run_application,
                 stage_runner,
+                event_bus=run_event_bus,
             )
 
         except Exception:
@@ -455,6 +466,7 @@ class EnterpriseResearchService:
             self._application = None
             self._run_application = None
             self._run_executor = None
+            self._run_event_bus = None
             self._deps = None
 
             raise
@@ -462,6 +474,7 @@ class EnterpriseResearchService:
         self._application = application
         self._run_application = run_application
         self._run_executor = run_executor
+        self._run_event_bus = run_event_bus
 
     async def _build_postgres_repositories(
         self,
@@ -517,6 +530,7 @@ class EnterpriseResearchService:
 
         self._application = None
         self._run_application = None
+        self._run_event_bus = None
 
         if self._engine is not None:
             await self._engine.dispose()
@@ -577,6 +591,16 @@ class EnterpriseResearchService:
             )
 
         return executor
+
+    async def require_run_event_bus(self) -> ResearchRunEventBus:
+        """Return the active worker-local event history."""
+        event_bus = self._run_event_bus
+        if event_bus is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="enterprise-research extension is not running",
+            )
+        return event_bus
 
 
 def build_router(service: EnterpriseResearchService) -> APIRouter:
@@ -870,5 +894,62 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
             ) from exc
 
         return ResearchRunResponse.from_domain(run)
+
+    @router.get("/tasks/{task_id}/runs/{run_id}/events")
+    async def stream_run_events(
+        task_id: UUID,
+        run_id: UUID,
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+        application: ResearchRunApplicationService = Depends(service.require_run_application),
+        event_bus: ResearchRunEventBus = Depends(service.require_run_event_bus),
+    ) -> StreamingResponse:
+        """Replay and follow bounded, process-local run events as SSE."""
+        try:
+            await application.get_run(task_id, run_id)
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+
+        cursor: int | None = None
+        if last_event_id is not None:
+            if len(last_event_id) > 20 or not last_event_id.isascii() or not last_event_id.isdecimal():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Last-Event-ID must be a non-negative decimal integer.",
+                )
+            cursor = int(last_event_id)
+
+        try:
+            event_bus.assert_available(task_id, run_id, cursor)
+        except LookupError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except RunEventHistoryExpired as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+        async def generate():
+            async for event in event_bus.stream(task_id, run_id, last_event_id=cursor):
+                yield encode_run_event(event)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     return router

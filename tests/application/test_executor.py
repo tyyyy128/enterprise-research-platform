@@ -8,6 +8,7 @@ from enterprise_research.application import (
     ResearchRunApplicationService,
     ResearchRunExecutor,
 )
+from enterprise_research.application.run_events import ResearchRunEventBus
 from enterprise_research.domain import (
     ResearchRunStatus,
 )
@@ -262,5 +263,50 @@ def test_shutdown_cancels_without_marking_failure() -> None:
         assert loaded.status == ResearchRunStatus.PLANNING
         assert loaded.error is None
         assert executor.active_count == 0
+
+    asyncio.run(run())
+
+
+def test_executor_publishes_stage_and_failure_events() -> None:
+    async def run() -> None:
+        application, run_application = create_services()
+        aggregate = await application.create_task("Live progress failure")
+        research_run = await run_application.create_run(aggregate.task.task_id)
+        bus = ResearchRunEventBus()
+        executor = ResearchRunExecutor(run_application, FailingStageRunner(), event_bus=bus)
+        executor.start(aggregate.task.task_id, research_run.run_id)
+        await wait_until_idle(executor)
+
+        events = [event async for event in bus.stream(aggregate.task.task_id, research_run.run_id)]
+        assert [event.event for event in events] == [
+            "run.created",
+            "run.stage",
+            "run.stage",
+            "run.failed",
+        ]
+        assert events[-1].data["error"] == "search provider unavailable"
+        persisted = await run_application.get_run(aggregate.task.task_id, research_run.run_id)
+        assert persisted.status == ResearchRunStatus.FAILED
+
+    asyncio.run(run())
+
+
+def test_executor_shutdown_terminates_sse_without_persisting_failure() -> None:
+    async def run() -> None:
+        application, run_application = create_services()
+        aggregate = await application.create_task("Live progress cancellation")
+        research_run = await run_application.create_run(aggregate.task.task_id)
+        bus = ResearchRunEventBus()
+        stage_runner = BlockingStageRunner()
+        executor = ResearchRunExecutor(run_application, stage_runner, event_bus=bus)
+        executor.start(aggregate.task.task_id, research_run.run_id)
+        await stage_runner.entered.wait()
+        await executor.shutdown()
+
+        events = [event async for event in bus.stream(aggregate.task.task_id, research_run.run_id)]
+        assert events[-1].event == "run.interrupted"
+        persisted = await run_application.get_run(aggregate.task.task_id, research_run.run_id)
+        assert persisted.status == ResearchRunStatus.PLANNING
+        assert persisted.error is None
 
     asyncio.run(run())

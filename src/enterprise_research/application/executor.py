@@ -7,6 +7,7 @@ import logging
 from typing import Protocol
 from uuid import UUID
 
+from enterprise_research.application.run_events import ResearchRunEventBus
 from enterprise_research.application.run_service import (
     ResearchRunApplicationService,
 )
@@ -56,9 +57,11 @@ class ResearchRunExecutor:
         self,
         application: ResearchRunApplicationService,
         stage_runner: ResearchStageRunner,
+        event_bus: ResearchRunEventBus | None = None,
     ) -> None:
         self._application = application
         self._stage_runner = stage_runner
+        self._event_bus = event_bus
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
 
     @property
@@ -76,6 +79,9 @@ class ResearchRunExecutor:
 
         if existing is not None and not existing.done():
             return
+
+        if self._event_bus is not None:
+            self._event_bus.register_run(task_id, run_id)
 
         task = asyncio.create_task(
             self._execute(task_id, run_id),
@@ -118,6 +124,9 @@ class ResearchRunExecutor:
                     stage,
                 )
 
+                if self._event_bus is not None:
+                    await self._event_bus.publish_stage(task_id, run_id, stage)
+
                 if stage != ResearchRunStatus.COMPLETED:
                     await self._stage_runner.run_stage(
                         task_id,
@@ -126,6 +135,8 @@ class ResearchRunExecutor:
                     )
 
         except asyncio.CancelledError:
+            if self._event_bus is not None:
+                await self._event_bus.publish_interruption(task_id, run_id)
             raise
 
         except Exception as exc:
@@ -142,7 +153,12 @@ class ResearchRunExecutor:
                     "Failed to persist research run failure for %s",
                     run_id,
                 )
+                if self._event_bus is not None:
+                    await self._event_bus.publish_interruption(task_id, run_id)
                 raise
+
+            if self._event_bus is not None:
+                await self._event_bus.publish_failure(task_id, run_id, message)
 
     def _task_done(
         self,

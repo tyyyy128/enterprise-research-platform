@@ -7,6 +7,7 @@ from uuid import UUID
 from enterprise_research.application.evidence_extraction_service import (
     ResearchEvidenceExtractionService,
 )
+from enterprise_research.application.evidence_progress import EvidenceProgressCallback
 from enterprise_research.application.planning_service import (
     ResearchPlanningService,
 )
@@ -28,11 +29,13 @@ class ResearchPipelineStageRunner:
         search_service: ResearchSearchService | None = None,
         retrieval_service: ResearchRetrievalService | None = None,
         evidence_extraction_service: (ResearchEvidenceExtractionService | None) = None,
+        evidence_progress_callback: EvidenceProgressCallback | None = None,
     ) -> None:
         self._planning_service = planning_service
         self._search_service = search_service
         self._retrieval_service = retrieval_service
         self._evidence_extraction_service = evidence_extraction_service
+        self._evidence_progress_callback = evidence_progress_callback
 
     async def run_stage(
         self,
@@ -63,7 +66,11 @@ class ResearchPipelineStageRunner:
             return
 
         if stage == ResearchRunStatus.VERIFYING and self._evidence_extraction_service is not None:
-            await self._evidence_extraction_service.extract_run(
-                task_id,
-                run_id,
-            )
+            if self._evidence_progress_callback is None:
+                await self._evidence_extraction_service.extract_run(task_id, run_id)
+            else:
+                await self._evidence_extraction_service.extract_run(
+                    task_id,
+                    run_id,
+                    progress_callback=self._evidence_progress_callback,
+                )

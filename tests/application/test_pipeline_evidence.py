@@ -151,3 +151,33 @@ def test_pipeline_propagates_evidence_extraction_failure() -> None:
             )
 
     asyncio.run(run())
+
+
+def test_pipeline_forwards_live_evidence_progress_callback() -> None:
+    class CallbackEvidenceExtractionService:
+        def __init__(self) -> None:
+            self.received_callback = None
+
+        async def extract_run(self, task_id, run_id, *, progress_callback=None):
+            self.received_callback = progress_callback
+            if progress_callback is not None:
+                await progress_callback((task_id, run_id))
+
+    async def run() -> None:
+        evidence = CallbackEvidenceExtractionService()
+        emitted = []
+
+        async def on_progress(progress):
+            emitted.append(progress)
+
+        runner = ResearchPipelineStageRunner(
+            RecordingPlanningService(),  # type: ignore[arg-type]
+            evidence_extraction_service=evidence,  # type: ignore[arg-type]
+            evidence_progress_callback=on_progress,  # type: ignore[arg-type]
+        )
+        task_id, run_id = uuid4(), uuid4()
+        await runner.run_stage(task_id, run_id, ResearchRunStatus.VERIFYING)
+        assert evidence.received_callback is on_progress
+        assert emitted == [(task_id, run_id)]
+
+    asyncio.run(run())
