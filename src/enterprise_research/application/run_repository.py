@@ -6,6 +6,7 @@ from typing import Protocol
 from uuid import UUID
 
 from enterprise_research.application.run_lease import ResearchRunLease
+from enterprise_research.application.stage_journal import ResearchStageAttempt, ResearchStageOutcome
 from enterprise_research.domain import ResearchRun, ResearchRunStatus
 
 
@@ -36,3 +37,19 @@ class ResearchRunRepository(Protocol):
         self, run: ResearchRun, lease: ResearchRunLease, *, expected_status: ResearchRunStatus
     ) -> None:
         """CAS a run transition only if the current lease is valid."""
+
+    async def start_stage(self, lease: ResearchRunLease, stage: ResearchRunStatus) -> ResearchStageAttempt:
+        """Atomically append one STARTED attempt if current lease and stage match."""
+
+    async def finish_stage(
+        self,
+        lease: ResearchRunLease,
+        stage: ResearchRunStatus,
+        *,
+        outcome: ResearchStageOutcome,
+        error: str | None = None,
+    ) -> ResearchStageAttempt:
+        """Atomically finish this generation's started attempt under its live lease."""
+
+    async def list_stage_attempts(self, run_id: UUID) -> list[ResearchStageAttempt]:
+        """Return persisted stage attempts for recovery inspection, never replay."""

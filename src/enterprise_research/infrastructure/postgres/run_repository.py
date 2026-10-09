@@ -12,8 +12,15 @@ from enterprise_research.application.run_lease import (
     ResearchRunLeaseLostError,
     validate_lease_ttl,
 )
+from enterprise_research.application.stage_journal import (
+    ResearchStageAttempt,
+    ResearchStageJournalConflictError,
+    ResearchStageOutcome,
+    validate_stage,
+    validate_stage_finish,
+)
 from enterprise_research.domain import ResearchRun, ResearchRunStatus
-from enterprise_research.infrastructure.postgres.models import ResearchRunRow
+from enterprise_research.infrastructure.postgres.models import ResearchRunRow, ResearchStageAttemptRow
 
 _TERMINAL = (ResearchRunStatus.COMPLETED.value, ResearchRunStatus.FAILED.value)
 
@@ -210,3 +217,99 @@ class PostgresResearchRunRepository:
                 changed = (await session.execute(statement)).scalar_one_or_none()
                 if changed is None:
                     raise ResearchRunLeaseLostError("Run transition refused: lease lost or stale status.")
+
+    async def _require_stage_lease(
+        self, session: AsyncSession, lease: ResearchRunLease, stage: ResearchRunStatus
+    ) -> None:
+        """Lock the run, then validate stage/owner/token/expiry in PostgreSQL.
+
+        The row lock serializes journal commits against claim/renew/release
+        and guarded status changes. The database clock is evaluated AFTER
+        a competing writer releases the row lock.
+        """
+        statement = (
+            select(ResearchRunRow.id)
+            .where(
+                ResearchRunRow.id == lease.run_id,
+                ResearchRunRow.status == stage.value,
+                ResearchRunRow.lease_owner_id == lease.owner_id,
+                ResearchRunRow.lease_fencing_token == lease.fencing_token,
+                ResearchRunRow.lease_expires_at > func.clock_timestamp(),
+            )
+            .with_for_update(of=ResearchRunRow)
+        )
+        if (await session.execute(statement)).scalar_one_or_none() is None:
+            raise ResearchRunLeaseLostError("Stage journal write refused: lease lost or unexpected stage.")
+
+    @staticmethod
+    def _attempt_from_row(row: ResearchStageAttemptRow) -> ResearchStageAttempt:
+        return ResearchStageAttempt(
+            run_id=row.run_id,
+            stage=ResearchRunStatus(row.stage),
+            fencing_token=row.fencing_token,
+            outcome=ResearchStageOutcome(row.outcome),
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            error=row.error,
+        )
+
+    async def start_stage(self, lease: ResearchRunLease, stage: ResearchRunStatus) -> ResearchStageAttempt:
+        """Insert STARTED only after acquiring and validating the run row lock."""
+        validate_stage(stage)
+        async with self._session_factory() as session:
+            async with session.begin():
+                await self._require_stage_lease(session, lease, stage)
+                key = (lease.run_id, stage.value, lease.fencing_token)
+                if await session.get(ResearchStageAttemptRow, key) is not None:
+                    raise ResearchStageJournalConflictError("Stage attempt already started for this generation.")
+                row = ResearchStageAttemptRow(
+                    run_id=lease.run_id,
+                    stage=stage.value,
+                    fencing_token=lease.fencing_token,
+                    outcome=ResearchStageOutcome.STARTED.value,
+                    started_at=func.clock_timestamp(),
+                )
+                session.add(row)
+                await session.flush()
+                await session.refresh(row)
+                return self._attempt_from_row(row)
+
+    async def finish_stage(
+        self,
+        lease: ResearchRunLease,
+        stage: ResearchRunStatus,
+        *,
+        outcome: ResearchStageOutcome,
+        error: str | None = None,
+    ) -> ResearchStageAttempt:
+        """Set a terminal attempt result under the same live run row lock."""
+        validate_stage(stage)
+        error = validate_stage_finish(outcome, error)
+        async with self._session_factory() as session:
+            async with session.begin():
+                await self._require_stage_lease(session, lease, stage)
+                key = (lease.run_id, stage.value, lease.fencing_token)
+                row = await session.get(ResearchStageAttemptRow, key, with_for_update=True)
+                if row is None or row.outcome != ResearchStageOutcome.STARTED.value:
+                    raise ResearchStageJournalConflictError("Stage attempt is missing or already finished.")
+                row.outcome = outcome.value
+                row.error = error
+                row.finished_at = func.clock_timestamp()
+                await session.flush()
+                await session.refresh(row)
+                return self._attempt_from_row(row)
+
+    async def list_stage_attempts(self, run_id: UUID) -> list[ResearchStageAttempt]:
+        """Read a stable ordered history without claiming or advancing a run."""
+        statement = (
+            select(ResearchStageAttemptRow)
+            .where(ResearchStageAttemptRow.run_id == run_id)
+            .order_by(
+                ResearchStageAttemptRow.started_at.asc(),
+                ResearchStageAttemptRow.stage.asc(),
+                ResearchStageAttemptRow.fencing_token.asc(),
+            )
+        )
+        async with self._session_factory() as session:
+            rows = (await session.scalars(statement)).all()
+            return [self._attempt_from_row(row) for row in rows]

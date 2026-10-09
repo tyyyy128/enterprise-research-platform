@@ -16,6 +16,7 @@ from enterprise_research.application.run_lease import (
 from enterprise_research.application.run_service import (
     ResearchRunApplicationService,
 )
+from enterprise_research.application.stage_journal import ResearchStageOutcome
 from enterprise_research.domain import ResearchRunStatus
 
 logger = logging.getLogger(__name__)
@@ -186,11 +187,28 @@ class ResearchRunExecutor:
                     # Avoid renewal racing the terminal commit/SSE event.
                     stop.set()
 
+                if stage != ResearchRunStatus.COMPLETED:
+                    # A persisted stage status only proves stage ENTRY. The
+                    # journal records the actual attempt before work can begin.
+                    await self._application.start_stage(task_id, run_id, stage, lease=lease)
+
                 if self._event_bus is not None:
                     await self._event_bus.publish_stage(task_id, run_id, stage)
 
                 if stage != ResearchRunStatus.COMPLETED:
-                    await self._stage_runner.run_stage(task_id, run_id, stage)
+                    try:
+                        await self._stage_runner.run_stage(task_id, run_id, stage)
+                    except ResearchRunLeaseLostError:
+                        raise
+                    except Exception as exc:
+                        message = str(exc).strip() or exc.__class__.__name__
+                        await self._application.finish_stage(
+                            task_id, run_id, stage, lease=lease, outcome=ResearchStageOutcome.FAILED, error=message
+                        )
+                        raise
+                    await self._application.finish_stage(
+                        task_id, run_id, stage, lease=lease, outcome=ResearchStageOutcome.COMPLETED
+                    )
 
         except asyncio.CancelledError:
             if self._event_bus is not None:

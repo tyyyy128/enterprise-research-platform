@@ -75,6 +75,11 @@ from enterprise_research.application.search_service import (
 from enterprise_research.application.service import (
     ResearchApplicationService,
 )
+from enterprise_research.application.stage_journal import (
+    ResearchStageAttempt,
+    ResearchStageJournalConflictError,
+    ResearchStageOutcome,
+)
 
 __all__ = [
     "ResearchApplicationError",
@@ -91,6 +96,9 @@ __all__ = [
     "ResearchRunNotFoundError",
     "ResearchRunRepository",
     "ResearchStageRunner",
+    "ResearchStageAttempt",
+    "ResearchStageJournalConflictError",
+    "ResearchStageOutcome",
     "ResearchTaskNotFoundError",
     "SkeletonResearchStageRunner",
     "ResearchSearchError",

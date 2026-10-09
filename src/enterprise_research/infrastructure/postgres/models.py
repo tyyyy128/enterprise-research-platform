@@ -425,6 +425,44 @@ class ResearchRunRow(Base):
     )
 
 
+class ResearchStageAttemptRow(Base):
+    """One fenced stage attempt, including entries left in doubt by a crash."""
+
+    __tablename__ = "research_run_stage_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "stage IN ('planning', 'searching', 'extracting', 'verifying', 'writing')",
+            name="ck_research_run_stage_attempts_stage",
+        ),
+        CheckConstraint(
+            "outcome IN ('started', 'completed', 'failed')",
+            name="ck_research_run_stage_attempts_outcome",
+        ),
+        CheckConstraint("fencing_token > 0", name="ck_research_run_stage_attempts_fence"),
+        CheckConstraint(
+            "(outcome = 'started' AND finished_at IS NULL AND error IS NULL) OR "
+            "(outcome = 'completed' AND finished_at IS NOT NULL AND error IS NULL) OR "
+            "(outcome = 'failed' AND finished_at IS NOT NULL "
+            "AND error IS NOT NULL AND length(btrim(error)) > 0)",
+            name="ck_research_run_stage_attempts_finished_shape",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR finished_at >= started_at",
+            name="ck_research_run_stage_attempts_time_order",
+        ),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    stage: Mapped[str] = mapped_column(String(32), primary_key=True)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ResearchPlanRow(Base):
     """Persisted structured research plan."""
 

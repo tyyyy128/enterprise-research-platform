@@ -12,6 +12,13 @@ from enterprise_research.application.run_lease import (
     ResearchRunLeaseLostError,
     validate_lease_ttl,
 )
+from enterprise_research.application.stage_journal import (
+    ResearchStageAttempt,
+    ResearchStageJournalConflictError,
+    ResearchStageOutcome,
+    validate_stage,
+    validate_stage_finish,
+)
 from enterprise_research.domain import ResearchRun, ResearchRunStatus
 from enterprise_research.domain.models import utc_now
 
@@ -23,6 +30,7 @@ class InMemoryResearchRunRepository:
         self._items: dict[UUID, ResearchRun] = {}
         self._leases: dict[UUID, ResearchRunLease] = {}
         self._fences: dict[UUID, int] = {}
+        self._stage_attempts: dict[tuple[UUID, ResearchRunStatus, int], ResearchStageAttempt] = {}
         self._lock = asyncio.Lock()
         self._clock = clock
 
@@ -115,6 +123,69 @@ class InMemoryResearchRunRepository:
             ):
                 raise ResearchRunLeaseLostError("Run transition refused: lease lost or stale status.")
             self._items[run.run_id] = run.model_copy(deep=True)
+
+    def _require_live_stage(self, lease: ResearchRunLease, stage: ResearchRunStatus) -> None:
+        """Called only under the repository lock."""
+        run = self._items.get(lease.run_id)
+        if (
+            run is None
+            or run.status != stage
+            or not self._matches(self._leases.get(lease.run_id), lease, self._clock())
+        ):
+            raise ResearchRunLeaseLostError("Stage journal update refused: lease lost or unexpected stage.")
+
+    async def start_stage(self, lease: ResearchRunLease, stage: ResearchRunStatus) -> ResearchStageAttempt:
+        """Start one attempt under the same in-process lock as fenced transitions."""
+        validate_stage(stage)
+        async with self._lock:
+            self._require_live_stage(lease, stage)
+            key = (lease.run_id, stage, lease.fencing_token)
+            if key in self._stage_attempts:
+                raise ResearchStageJournalConflictError("Stage attempt already started for this generation.")
+            attempt = ResearchStageAttempt(
+                run_id=lease.run_id,
+                stage=stage,
+                fencing_token=lease.fencing_token,
+                outcome=ResearchStageOutcome.STARTED,
+                started_at=self._clock(),
+            )
+            self._stage_attempts[key] = attempt
+            return attempt
+
+    async def finish_stage(
+        self,
+        lease: ResearchRunLease,
+        stage: ResearchRunStatus,
+        *,
+        outcome: ResearchStageOutcome,
+        error: str | None = None,
+    ) -> ResearchStageAttempt:
+        """Finish only an existing STARTED attempt of the current owner."""
+        validate_stage(stage)
+        error = validate_stage_finish(outcome, error)
+        async with self._lock:
+            self._require_live_stage(lease, stage)
+            key = (lease.run_id, stage, lease.fencing_token)
+            started = self._stage_attempts.get(key)
+            if started is None or started.outcome != ResearchStageOutcome.STARTED:
+                raise ResearchStageJournalConflictError("Stage attempt is missing or already finished.")
+            finished = ResearchStageAttempt(
+                run_id=started.run_id,
+                stage=stage,
+                fencing_token=lease.fencing_token,
+                outcome=outcome,
+                started_at=started.started_at,
+                finished_at=self._clock(),
+                error=error,
+            )
+            self._stage_attempts[key] = finished
+            return finished
+
+    async def list_stage_attempts(self, run_id: UUID) -> list[ResearchStageAttempt]:
+        """Return immutable, stable snapshots without acquiring a lease."""
+        async with self._lock:
+            entries = [entry for entry in self._stage_attempts.values() if entry.run_id == run_id]
+            return sorted(entries, key=lambda a: (a.started_at, a.stage.value, a.fencing_token))
 
     @staticmethod
     def _matches(current: ResearchRunLease | None, supplied: ResearchRunLease, now: datetime) -> bool:

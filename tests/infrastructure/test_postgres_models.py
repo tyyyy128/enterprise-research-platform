@@ -11,6 +11,7 @@ def test_expected_postgres_tables_are_registered() -> None:
         "claim_evidence",
         "research_reports",
         "research_runs",
+        "research_run_stage_attempts",
         "research_plan_questions",
         "research_plans",
         "report_claims",
@@ -93,3 +94,17 @@ def test_retrieved_document_references_source() -> None:
     assert {column.name for column in table.primary_key.columns} == {"source_id"}
 
     assert "metadata" in table.columns
+
+
+def test_research_stage_attempts_reference_run_and_are_uniquely_fenced() -> None:
+    table = Base.metadata.tables["research_run_stage_attempts"]
+    assert {fk.target_fullname for fk in table.foreign_keys} == {"research_runs.id"}
+    assert {column.name for column in table.primary_key.columns} == {"run_id", "stage", "fencing_token"}
+    assert table.columns["finished_at"].nullable is True
+    assert table.columns["started_at"].nullable is False
+    assert table.columns["outcome"].nullable is False
+    assert {constraint.name for constraint in table.constraints if constraint.name} >= {
+        "ck_research_run_stage_attempts_finished_shape",
+        "ck_research_run_stage_attempts_fence",
+        "ck_research_run_stage_attempts_time_order",
+    }

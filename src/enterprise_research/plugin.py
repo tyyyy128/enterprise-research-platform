@@ -507,6 +507,7 @@ class EnterpriseResearchService:
                 required_tables = (
                     "research_tasks",
                     "research_runs",
+                    "research_run_stage_attempts",
                     "research_plans",
                     "research_plan_questions",
                     "research_source_documents",

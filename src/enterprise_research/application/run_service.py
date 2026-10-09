@@ -11,13 +11,14 @@ from enterprise_research.application.errors import (
 from enterprise_research.application.repository import (
     ResearchRepository,
 )
-from enterprise_research.application.run_lease import ResearchRunLease
+from enterprise_research.application.run_lease import ResearchRunLease, ResearchRunLeaseLostError
 from enterprise_research.application.run_recovery import (
     ResearchRunRecoveryCandidate,
 )
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
+from enterprise_research.application.stage_journal import ResearchStageAttempt, ResearchStageOutcome
 from enterprise_research.domain import (
     ResearchRun,
     ResearchRunStatus,
@@ -148,3 +149,33 @@ class ResearchRunApplicationService:
     async def release_run_lease(self, lease: ResearchRunLease) -> bool:
         """Best-effort owner-specific release."""
         return await self._run_repository.release_lease(lease)
+
+    async def start_stage(
+        self, task_id: UUID, run_id: UUID, stage: ResearchRunStatus, *, lease: ResearchRunLease
+    ) -> ResearchStageAttempt:
+        """Record entry into a stage after its fenced run transition."""
+        if lease.run_id != run_id:
+            raise ResearchRunLeaseLostError("Stage attempt lease refers to a different run.")
+        await self.get_run(task_id, run_id)
+        return await self._run_repository.start_stage(lease, stage)
+
+    async def finish_stage(
+        self,
+        task_id: UUID,
+        run_id: UUID,
+        stage: ResearchRunStatus,
+        *,
+        lease: ResearchRunLease,
+        outcome: ResearchStageOutcome,
+        error: str | None = None,
+    ) -> ResearchStageAttempt:
+        """Record a stage outcome without certifying external side effects."""
+        if lease.run_id != run_id:
+            raise ResearchRunLeaseLostError("Stage attempt lease refers to a different run.")
+        await self.get_run(task_id, run_id)
+        return await self._run_repository.finish_stage(lease, stage, outcome=outcome, error=error)
+
+    async def inspect_stage_attempts(self, task_id: UUID, run_id: UUID) -> list[ResearchStageAttempt]:
+        """Read-only history. STARTED means in-doubt until separately reconciled."""
+        await self.get_run(task_id, run_id)
+        return await self._run_repository.list_stage_attempts(run_id)
