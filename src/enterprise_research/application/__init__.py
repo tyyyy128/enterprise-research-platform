@@ -64,6 +64,11 @@ from enterprise_research.application.run_repository import (
 from enterprise_research.application.run_service import (
     ResearchRunApplicationService,
 )
+from enterprise_research.application.safe_resume import (
+    ResearchResumeDecision,
+    ResearchResumeDisposition,
+    ResearchSafeResumeInspector,
+)
 from enterprise_research.application.search import (
     SearchProvider,
     SearchResult,
@@ -95,6 +100,9 @@ __all__ = [
     "ResearchRunLeaseLostError",
     "ResearchRunNotFoundError",
     "ResearchRunRepository",
+    "ResearchResumeDecision",
+    "ResearchResumeDisposition",
+    "ResearchSafeResumeInspector",
     "ResearchStageRunner",
     "ResearchStageAttempt",
     "ResearchStageJournalConflictError",

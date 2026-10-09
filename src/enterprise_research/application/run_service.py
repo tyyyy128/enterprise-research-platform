@@ -142,6 +142,25 @@ class ResearchRunApplicationService:
         await self.get_run(task_id, run_id)
         return await self._run_repository.claim_lease(run_id, owner_id, ttl_seconds=ttl_seconds)
 
+    async def claim_reconciled_run_lease(
+        self,
+        task_id: UUID,
+        run_id: UUID,
+        owner_id: UUID,
+        *,
+        ttl_seconds: int,
+        expected_status: ResearchRunStatus,
+    ) -> ResearchRunLease | None:
+        """Explicit in-flight claim, for use ONLY after safe resume inspection.
+
+        The executor re-inspects under the new fenced lease before dispatch.
+        This method is deliberately not exposed through the HTTP API.
+        """
+        run = await self.get_run(task_id, run_id)
+        if run.is_terminal or run.status != expected_status or run.status == ResearchRunStatus.PENDING:
+            return None
+        return await self._run_repository.claim_lease(run_id, owner_id, ttl_seconds=ttl_seconds, allow_inflight=True)
+
     async def renew_run_lease(self, lease: ResearchRunLease, *, ttl_seconds: int) -> ResearchRunLease | None:
         """Heartbeat without changing the stage status."""
         return await self._run_repository.renew_lease(lease, ttl_seconds=ttl_seconds)

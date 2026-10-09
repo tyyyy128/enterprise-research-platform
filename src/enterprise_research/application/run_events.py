@@ -68,6 +68,37 @@ class ResearchRunEventBus:
         self._runs[run_id] = run
         self._append(run, "run.created", {"status": ResearchRunStatus.PENDING.value})
 
+    async def publish_resume(
+        self, task_id: UUID, run_id: UUID, *, previous_stage: ResearchRunStatus, next_stage: ResearchRunStatus
+    ) -> None:
+        """Begin a new process-local event segment for an explicit recovery.
+
+        This is not a durable replay across service restarts. A previously
+        interrupted local stream is reopened, preserving monotonically
+        increasing event IDs for clients that reconnect on this process.
+        """
+        run = self._runs.get(run_id)
+        if run is None:
+            run = _RunEvents(task_id=task_id, run_id=run_id)
+            self._runs[run_id] = run
+        elif run.task_id != task_id:
+            raise ValueError("Run events belong to a different task.")
+        async with run.condition:
+            if run.terminal:
+                if not run.events or run.events[-1].event != "run.interrupted":
+                    raise RuntimeError("Cannot reopen a completed or failed SSE stream.")
+                run.terminal = False
+                try:
+                    self._completed_runs.remove(run_id)
+                except ValueError:
+                    pass
+            self._append(
+                run,
+                "run.resumed",
+                {"previous_stage": previous_stage.value, "next_stage": next_stage.value},
+            )
+            run.condition.notify_all()
+
     def assert_available(self, task_id: UUID, run_id: UUID, last_event_id: int | None) -> None:
         """Validate a resume cursor before HTTP response headers are committed."""
         run = self._get(task_id, run_id)

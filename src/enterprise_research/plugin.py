@@ -37,6 +37,7 @@ from enterprise_research.application import (
     ResearchRunApplicationService,
     ResearchRunExecutor,
     ResearchRunNotFoundError,
+    ResearchSafeResumeInspector,
     ResearchSearchService,
     ResearchTaskNotFoundError,
     SkeletonResearchStageRunner,
@@ -471,6 +472,12 @@ class EnterpriseResearchService:
                 run_application,
                 stage_runner,
                 event_bus=run_event_bus,
+                resume_inspector=ResearchSafeResumeInspector(
+                    run_application,
+                    research_repository,
+                    plan_repository,
+                    document_repository,
+                ),
             )
 
         except Exception:

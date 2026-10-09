@@ -16,6 +16,7 @@ from enterprise_research.application.run_lease import (
 from enterprise_research.application.run_service import (
     ResearchRunApplicationService,
 )
+from enterprise_research.application.safe_resume import ResearchResumeDisposition, ResearchSafeResumeInspector
 from enterprise_research.application.stage_journal import ResearchStageOutcome
 from enterprise_research.domain import ResearchRunStatus
 
@@ -70,6 +71,7 @@ class ResearchRunExecutor:
         event_bus: ResearchRunEventBus | None = None,
         *,
         lease_ttl_seconds: int = 30,
+        resume_inspector: ResearchSafeResumeInspector | None = None,
     ) -> None:
         validate_lease_ttl(lease_ttl_seconds)
         self._lease_ttl_seconds = lease_ttl_seconds
@@ -77,6 +79,7 @@ class ResearchRunExecutor:
         self._application = application
         self._stage_runner = stage_runner
         self._event_bus = event_bus
+        self._resume_inspector = resume_inspector
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
 
     @property
@@ -95,14 +98,26 @@ class ResearchRunExecutor:
         if existing is not None and not existing.done():
             return
 
-        if self._event_bus is not None:
+        self._schedule(task_id, run_id)
+
+    def _schedule(
+        self,
+        task_id: UUID,
+        run_id: UUID,
+        *,
+        adopted_lease: ResearchRunLease | None = None,
+        next_stage: ResearchRunStatus | None = None,
+        register_events: bool = True,
+    ) -> None:
+        """Register one local job after ownership/preflight is decided."""
+
+        if self._event_bus is not None and register_events:
             self._event_bus.register_run(task_id, run_id)
 
         task = asyncio.create_task(
-            self._execute(task_id, run_id),
+            self._execute(task_id, run_id, adopted_lease=adopted_lease, next_stage=next_stage),
             name=f"enterprise-research-run:{run_id}",
         )
-
         self._tasks[run_id] = task
         task.add_done_callback(
             lambda done_task: self._task_done(
@@ -110,6 +125,59 @@ class ResearchRunExecutor:
                 done_task,
             )
         )
+
+    async def resume(self, task_id: UUID, run_id: UUID) -> bool:
+        """Explicitly schedule only work after a provably completed stage.
+
+        A False return means paused, already local, or leased elsewhere.  The
+        executor never automatically resumes runs when the service starts.
+        """
+        if self._resume_inspector is None:
+            raise RuntimeError("Safe resume inspector has not been configured.")
+        active = self._tasks.get(run_id)
+        if active is not None and not active.done():
+            return False
+
+        before = await self._resume_inspector.inspect(task_id, run_id)
+        if before.disposition != ResearchResumeDisposition.READY or before.next_stage is None:
+            logger.info("Research run %s paused: %s", run_id, before.reason)
+            return False
+
+        lease = await self._application.claim_reconciled_run_lease(
+            task_id,
+            run_id,
+            self._owner_id,
+            ttl_seconds=self._lease_ttl_seconds,
+            expected_status=before.status,
+        )
+        if lease is None:
+            return False
+
+        scheduled = False
+        try:
+            # The read-only proof is recomputed after the fencing token
+            # changes: no other live owner can commit a guarded side effect.
+            after = await self._resume_inspector.inspect(task_id, run_id)
+            if after != before:
+                logger.warning("Run %s recovery proof changed after claim; keeping paused", run_id)
+                return False
+            if self._event_bus is not None:
+                await self._event_bus.publish_resume(
+                    task_id, run_id, previous_stage=before.status, next_stage=before.next_stage
+                )
+            self._schedule(
+                task_id,
+                run_id,
+                adopted_lease=lease,
+                next_stage=before.next_stage,
+                register_events=False,
+            )
+            scheduled = True
+            logger.info("Explicit recovery scheduled for run %s from %s", run_id, before.next_stage.value)
+            return True
+        finally:
+            if not scheduled:
+                await self._application.release_run_lease(lease)
 
     async def shutdown(self) -> None:
         """Cancel and drain all in-process research tasks."""
@@ -161,18 +229,22 @@ class ResearchRunExecutor:
         self,
         task_id: UUID,
         run_id: UUID,
+        *,
+        adopted_lease: ResearchRunLease | None = None,
+        next_stage: ResearchRunStatus | None = None,
     ) -> None:
-        lease: ResearchRunLease | None = None
+        lease: ResearchRunLease | None = adopted_lease
         heartbeat: asyncio.Task[None] | None = None
         stop = asyncio.Event()
         try:
             # The row must be atomically claimed BEFORE entering any stage.
-            lease = await self._application.claim_run_lease(
-                task_id,
-                run_id,
-                self._owner_id,
-                ttl_seconds=self._lease_ttl_seconds,
-            )
+            if lease is None:
+                lease = await self._application.claim_run_lease(
+                    task_id,
+                    run_id,
+                    self._owner_id,
+                    ttl_seconds=self._lease_ttl_seconds,
+                )
             if lease is None:
                 if self._event_bus is not None:
                     await self._event_bus.publish_interruption(task_id, run_id)
@@ -185,7 +257,12 @@ class ResearchRunExecutor:
                 name=f"enterprise-research-heartbeat:{run_id}",
             )
 
-            for stage in self._STAGES:
+            stages = self._STAGES
+            if next_stage is not None:
+                # The reconciled stage is skipped; only subsequent stages are
+                # journaled/executed under the new fencing generation.
+                stages = self._STAGES[self._STAGES.index(next_stage) :]
+            for stage in stages:
                 await self._application.advance_run(task_id, run_id, stage, lease=lease)
                 if stage == ResearchRunStatus.COMPLETED:
                     # Avoid renewal racing the terminal commit/SSE event.
