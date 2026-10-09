@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-from enterprise_research.domain import ResearchPlan
+from enterprise_research.application.run_lease import ResearchRunLease
+from enterprise_research.application.run_repository import ResearchRunRepository
+from enterprise_research.domain import ResearchPlan, ResearchRunStatus
 
 
 class InMemoryResearchPlanRepository:
@@ -27,6 +29,16 @@ class InMemoryResearchPlanRepository:
                 raise ValueError("Research run already has a different plan.")
 
             self._items[plan.run_id] = plan.model_copy(deep=True)
+
+    async def save_guarded(
+        self,
+        plan: ResearchPlan,
+        lease: ResearchRunLease,
+        *,
+        run_repository: ResearchRunRepository,
+    ) -> None:
+        async with run_repository.guarded_side_effect(lease, ResearchRunStatus.PLANNING, task_id=plan.task_id):
+            await self.save(plan)
 
     async def get_for_run(
         self,

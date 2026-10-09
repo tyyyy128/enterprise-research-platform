@@ -36,7 +36,7 @@ PREFIX = "/api/enterprise-research"
 
 
 class NoNetworkPlanner:
-    async def create_plan(self, task_id: UUID, run_id: UUID) -> None:
+    async def create_plan(self, task_id: UUID, run_id: UUID, *, lease=None) -> None:
         del task_id, run_id
         await asyncio.sleep(0)
 
@@ -50,7 +50,7 @@ class ControlledEvidence:
         self.fail = fail
         self.calls: list[tuple[UUID, UUID]] = []
 
-    async def extract_run(self, task_id: UUID, run_id: UUID, *, progress_callback=None) -> None:
+    async def extract_run(self, task_id: UUID, run_id: UUID, *, progress_callback=None, lease=None) -> None:
         assert progress_callback is not None
         self.calls.append((task_id, run_id))
         await progress_callback(progress(task_id, run_id, 0))

@@ -40,6 +40,7 @@ from enterprise_research.application.plan_repository import (
 from enterprise_research.application.repository import (
     ResearchRepository,
 )
+from enterprise_research.application.run_lease import ResearchRunLease
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
@@ -103,6 +104,7 @@ class ResearchEvidenceExtractionService:
         run_id: UUID,
         *,
         progress_callback: EvidenceProgressCallback | None = None,
+        lease: ResearchRunLease | None = None,
     ) -> EvidenceExtractionSummary:
         """Extract verified evidence and report completed chunks in real time."""
         aggregate = await self._research_repository.get(task_id)
@@ -272,7 +274,15 @@ class ResearchEvidenceExtractionService:
             aggregate.add_evidence(evidence)
 
         if created_count > 0:
-            await self._research_repository.save(aggregate)
+            if lease is None:
+                await self._research_repository.save(aggregate)
+            else:
+                await self._research_repository.save_guarded(
+                    aggregate,
+                    lease,
+                    ResearchRunStatus.VERIFYING,
+                    run_repository=self._run_repository,
+                )
 
         return EvidenceExtractionSummary(
             eligible_document_count=workload.eligible_document_count,

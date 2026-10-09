@@ -261,7 +261,7 @@ def test_executor_records_five_successful_attempts_and_terminal_run() -> None:
         _, runs, run = await setup()
 
         class Noop:
-            async def run_stage(self, *_args):
+            async def run_stage(self, *_args, **_kwargs):
                 await asyncio.sleep(0)
 
         executor = ResearchRunExecutor(runs, Noop())
@@ -281,7 +281,7 @@ def test_executor_records_failure_but_does_not_complete_the_failed_stage() -> No
         _, runs, run = await setup()
 
         class FailOnSearch:
-            async def run_stage(self, _task, _run, stage):
+            async def run_stage(self, _task, _run, stage, *, lease=None):
                 if stage == ResearchRunStatus.SEARCHING:
                     raise RuntimeError("provider is down")
 
@@ -302,7 +302,7 @@ def test_cancelled_executor_leaves_in_doubt_started_journal_not_a_failure() -> N
         started, release = asyncio.Event(), asyncio.Event()
 
         class Block:
-            async def run_stage(self, *_args):
+            async def run_stage(self, *_args, **_kwargs):
                 started.set()
                 await release.wait()
 
@@ -328,7 +328,7 @@ def test_successful_stage_work_with_failed_journal_commit_remains_in_doubt() -> 
         calls = []
 
         class Work:
-            async def run_stage(self, _task_id, _run_id, stage):
+            async def run_stage(self, _task_id, _run_id, stage, *, lease=None):
                 calls.append(stage)
 
         executor = ResearchRunExecutor(runs, Work())
@@ -352,7 +352,7 @@ def test_stage_start_must_commit_before_stage_runner_invoked() -> None:
         calls = []
 
         class Work:
-            async def run_stage(self, *_args):
+            async def run_stage(self, *_args, **_kwargs):
                 calls.append("called")
 
         bus = ResearchRunEventBus()
@@ -376,7 +376,7 @@ def test_lease_loss_during_stage_keeps_old_generation_started() -> None:
         interrupted = asyncio.Event()
 
         class NeverFinish:
-            async def run_stage(self, *_args):
+            async def run_stage(self, *_args, **_kwargs):
                 entered.set()
                 try:
                     await asyncio.Event().wait()

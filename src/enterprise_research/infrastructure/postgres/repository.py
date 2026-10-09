@@ -8,17 +8,21 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from enterprise_research.application.run_lease import ResearchRunLease
+from enterprise_research.application.run_repository import ResearchRunRepository
 from enterprise_research.domain import (
     Claim,
     ClaimStatus,
     Evidence,
     ResearchAggregate,
     ResearchReport,
+    ResearchRunStatus,
     ResearchTask,
     ResearchTaskStatus,
     Source,
     SourceType,
 )
+from enterprise_research.infrastructure.postgres.fenced_writes import lock_fenced_stage
 from enterprise_research.infrastructure.postgres.models import (
     ClaimEvidenceRow,
     ReportClaimRow,
@@ -39,15 +43,36 @@ class PostgresResearchRepository:
     ) -> None:
         self._session_factory = session_factory
 
-    async def save(
+    async def save(self, aggregate: ResearchAggregate) -> None:
+        """Legacy/unfenced bootstrap and administrative aggregate save."""
+        await self._save(aggregate, lease=None, stage=None)
+
+    async def save_guarded(
         self,
         aggregate: ResearchAggregate,
+        lease: ResearchRunLease,
+        stage: ResearchRunStatus,
+        *,
+        run_repository: ResearchRunRepository,
+    ) -> None:
+        """Fenced aggregate replacement, authorized in the same transaction."""
+        await self._save(aggregate, lease=lease, stage=stage)
+
+    async def _save(
+        self,
+        aggregate: ResearchAggregate,
+        *,
+        lease: ResearchRunLease | None,
+        stage: ResearchRunStatus | None,
     ) -> None:
         """Persist the complete aggregate atomically."""
         task = aggregate.task
 
         async with self._session_factory() as session:
             async with session.begin():
+                if lease is not None:
+                    assert stage is not None
+                    await lock_fenced_stage(session, lease, task_id=task.task_id, stage=stage)
                 # Version 2 persistence strategy:
                 # keep the task row stable and replace only aggregate-owned
                 # child rows. ResearchRun records will reference the task row.

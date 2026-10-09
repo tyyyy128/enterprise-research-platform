@@ -143,7 +143,7 @@ class BlockingStage:
         self.calls = 0
         self.cancelled = False
 
-    async def run_stage(self, _task_id: UUID, _run_id: UUID, stage: ResearchRunStatus) -> None:
+    async def run_stage(self, _task_id: UUID, _run_id: UUID, stage: ResearchRunStatus, *, lease=None) -> None:
         if stage == ResearchRunStatus.PLANNING:
             self.calls += 1
             self.started.set()

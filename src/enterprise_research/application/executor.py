@@ -30,6 +30,8 @@ class ResearchStageRunner(Protocol):
         task_id: UUID,
         run_id: UUID,
         stage: ResearchRunStatus,
+        *,
+        lease: ResearchRunLease | None = None,
     ) -> None:
         """Execute one stage."""
 
@@ -42,6 +44,8 @@ class SkeletonResearchStageRunner:
         task_id: UUID,
         run_id: UUID,
         stage: ResearchRunStatus,
+        *,
+        lease: ResearchRunLease | None = None,
     ) -> None:
         """Yield once without performing external research work."""
         await asyncio.sleep(0)
@@ -197,7 +201,7 @@ class ResearchRunExecutor:
 
                 if stage != ResearchRunStatus.COMPLETED:
                     try:
-                        await self._stage_runner.run_stage(task_id, run_id, stage)
+                        await self._stage_runner.run_stage(task_id, run_id, stage, lease=lease)
                     except ResearchRunLeaseLostError:
                         raise
                     except Exception as exc:

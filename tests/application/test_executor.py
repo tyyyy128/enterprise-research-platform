@@ -22,23 +22,13 @@ class RecordingStageRunner:
     def __init__(self) -> None:
         self.stages: list[ResearchRunStatus] = []
 
-    async def run_stage(
-        self,
-        task_id: UUID,
-        run_id: UUID,
-        stage: ResearchRunStatus,
-    ) -> None:
+    async def run_stage(self, task_id: UUID, run_id: UUID, stage: ResearchRunStatus, *, lease=None) -> None:
         self.stages.append(stage)
         await asyncio.sleep(0)
 
 
 class FailingStageRunner:
-    async def run_stage(
-        self,
-        task_id: UUID,
-        run_id: UUID,
-        stage: ResearchRunStatus,
-    ) -> None:
+    async def run_stage(self, task_id: UUID, run_id: UUID, stage: ResearchRunStatus, *, lease=None) -> None:
         if stage == ResearchRunStatus.SEARCHING:
             raise RuntimeError("search provider unavailable")
 
@@ -46,12 +36,7 @@ class FailingStageRunner:
 
 
 class EmptyErrorStageRunner:
-    async def run_stage(
-        self,
-        task_id: UUID,
-        run_id: UUID,
-        stage: ResearchRunStatus,
-    ) -> None:
+    async def run_stage(self, task_id: UUID, run_id: UUID, stage: ResearchRunStatus, *, lease=None) -> None:
         raise RuntimeError()
 
 
@@ -61,12 +46,7 @@ class BlockingStageRunner:
         self.release = asyncio.Event()
         self.calls = 0
 
-    async def run_stage(
-        self,
-        task_id: UUID,
-        run_id: UUID,
-        stage: ResearchRunStatus,
-    ) -> None:
+    async def run_stage(self, task_id: UUID, run_id: UUID, stage: ResearchRunStatus, *, lease=None) -> None:
         self.calls += 1
         self.entered.set()
 

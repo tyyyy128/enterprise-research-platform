@@ -10,10 +10,14 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from enterprise_research.application.run_lease import ResearchRunLease
+from enterprise_research.application.run_repository import ResearchRunRepository
 from enterprise_research.domain import (
     ResearchPlan,
     ResearchQuestion,
+    ResearchRunStatus,
 )
+from enterprise_research.infrastructure.postgres.fenced_writes import lock_fenced_stage
 from enterprise_research.infrastructure.postgres.models import (
     ResearchPlanQuestionRow,
     ResearchPlanRow,
@@ -30,13 +34,28 @@ class PostgresResearchPlanRepository:
     ) -> None:
         self._session_factory = session_factory
 
-    async def save(
+    async def save(self, plan: ResearchPlan) -> None:
+        """Legacy/unfenced plan bootstrap."""
+        await self._save(plan, lease=None)
+
+    async def save_guarded(
         self,
         plan: ResearchPlan,
+        lease: ResearchRunLease,
+        *,
+        run_repository: ResearchRunRepository,
     ) -> None:
+        """Fenced plan save sharing the run-row lock and business transaction."""
+        await self._save(plan, lease=lease)
+
+    async def _save(self, plan: ResearchPlan, *, lease: ResearchRunLease | None) -> None:
         """Insert or replace one run's structured plan."""
         async with self._session_factory() as session:
             async with session.begin():
+                if lease is not None:
+                    if lease.run_id != plan.run_id:
+                        raise ValueError("Plan and lease run IDs differ.")
+                    await lock_fenced_stage(session, lease, task_id=plan.task_id, stage=ResearchRunStatus.PLANNING)
                 run_row = await session.get(
                     ResearchRunRow,
                     plan.run_id,

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -133,6 +134,18 @@ class InMemoryResearchRunRepository:
             or not self._matches(self._leases.get(lease.run_id), lease, self._clock())
         ):
             raise ResearchRunLeaseLostError("Stage journal update refused: lease lost or unexpected stage.")
+
+    @asynccontextmanager
+    async def guarded_side_effect(
+        self, lease: ResearchRunLease, stage: ResearchRunStatus, *, task_id: UUID
+    ) -> AsyncIterator[None]:
+        """Hold the same lock as claim/renew while persisting memory effects."""
+        async with self._lock:
+            run = self._items.get(lease.run_id)
+            if run is None or run.task_id != task_id:
+                raise ResearchRunLeaseLostError("Fenced side effect refers to an unknown task.")
+            self._require_live_stage(lease, stage)
+            yield
 
     async def start_stage(self, lease: ResearchRunLease, stage: ResearchRunStatus) -> ResearchStageAttempt:
         """Start one attempt under the same in-process lock as fenced transitions."""

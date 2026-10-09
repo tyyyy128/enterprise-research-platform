@@ -14,6 +14,7 @@ from enterprise_research.application.planning_service import (
 from enterprise_research.application.retrieval_service import (
     ResearchRetrievalService,
 )
+from enterprise_research.application.run_lease import ResearchRunLease
 from enterprise_research.application.search_service import (
     ResearchSearchService,
 )
@@ -42,35 +43,47 @@ class ResearchPipelineStageRunner:
         task_id: UUID,
         run_id: UUID,
         stage: ResearchRunStatus,
+        *,
+        lease: ResearchRunLease | None = None,
     ) -> None:
         """Execute the work associated with one pipeline stage."""
         if stage == ResearchRunStatus.PLANNING:
-            await self._planning_service.create_plan(
-                task_id,
-                run_id,
-            )
+            if lease is None:
+                await self._planning_service.create_plan(task_id, run_id)
+            else:
+                await self._planning_service.create_plan(task_id, run_id, lease=lease)
             return
 
         if stage == ResearchRunStatus.SEARCHING and self._search_service is not None:
-            await self._search_service.search_run(
-                task_id,
-                run_id,
-            )
+            if lease is None:
+                await self._search_service.search_run(task_id, run_id)
+            else:
+                await self._search_service.search_run(task_id, run_id, lease=lease)
             return
 
         if stage == ResearchRunStatus.EXTRACTING and self._retrieval_service is not None:
-            await self._retrieval_service.retrieve_run(
-                task_id,
-                run_id,
-            )
+            if lease is None:
+                await self._retrieval_service.retrieve_run(task_id, run_id)
+            else:
+                await self._retrieval_service.retrieve_run(task_id, run_id, lease=lease)
             return
 
         if stage == ResearchRunStatus.VERIFYING and self._evidence_extraction_service is not None:
             if self._evidence_progress_callback is None:
-                await self._evidence_extraction_service.extract_run(task_id, run_id)
+                if lease is None:
+                    await self._evidence_extraction_service.extract_run(task_id, run_id)
+                else:
+                    await self._evidence_extraction_service.extract_run(task_id, run_id, lease=lease)
+            elif lease is None:
+                await self._evidence_extraction_service.extract_run(
+                    task_id,
+                    run_id,
+                    progress_callback=self._evidence_progress_callback,
+                )
             else:
                 await self._evidence_extraction_service.extract_run(
                     task_id,
                     run_id,
                     progress_callback=self._evidence_progress_callback,
+                    lease=lease,
                 )

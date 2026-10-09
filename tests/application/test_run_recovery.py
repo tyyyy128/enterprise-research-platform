@@ -176,7 +176,7 @@ def test_a_live_stage_is_listed_without_being_cancelled_or_replayed() -> None:
             self.release = asyncio.Event()
             self.calls: list[ResearchRunStatus] = []
 
-        async def run_stage(self, task_id: UUID, run_id: UUID, stage: ResearchRunStatus) -> None:
+        async def run_stage(self, task_id: UUID, run_id: UUID, stage: ResearchRunStatus, *, lease=None) -> None:
             del task_id, run_id
             self.calls.append(stage)
             if stage == ResearchRunStatus.PLANNING:

@@ -19,6 +19,7 @@ from enterprise_research.application.repository import (
 from enterprise_research.application.retrieval import (
     WebContentFetcher,
 )
+from enterprise_research.application.run_lease import ResearchRunLease
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
@@ -76,6 +77,8 @@ class ResearchRetrievalService:
         self,
         task_id: UUID,
         run_id: UUID,
+        *,
+        lease: ResearchRunLease | None = None,
     ) -> RetrievalSummary:
         """Retrieve all eligible web sources for one research run."""
         aggregate = await self._research_repository.get(task_id)
@@ -136,7 +139,16 @@ class ResearchRetrievalService:
                     },
                 )
 
-                await self._document_repository.save(document)
+                if lease is None:
+                    await self._document_repository.save(document)
+                else:
+                    await self._document_repository.save_guarded(
+                        document,
+                        lease,
+                        task_id=task_id,
+                        run_repository=self._run_repository,
+                        research_repository=self._research_repository,
+                    )
 
                 failed_count += 1
                 continue
@@ -154,7 +166,16 @@ class ResearchRetrievalService:
                 metadata=metadata,
             )
 
-            await self._document_repository.save(document)
+            if lease is None:
+                await self._document_repository.save(document)
+            else:
+                await self._document_repository.save_guarded(
+                    document,
+                    lease,
+                    task_id=task_id,
+                    run_repository=self._run_repository,
+                    research_repository=self._research_repository,
+                )
 
             succeeded_count += 1
 

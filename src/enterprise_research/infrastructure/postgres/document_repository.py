@@ -9,12 +9,18 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from enterprise_research.application.repository import ResearchRepository
+from enterprise_research.application.run_lease import ResearchRunLease, ResearchRunLeaseLostError
+from enterprise_research.application.run_repository import ResearchRunRepository
 from enterprise_research.domain import (
+    ResearchRunStatus,
     RetrievalStatus,
     RetrievedDocument,
 )
+from enterprise_research.infrastructure.postgres.fenced_writes import lock_fenced_stage
 from enterprise_research.infrastructure.postgres.models import (
     ResearchSourceDocumentRow,
+    ResearchSourceRow,
 )
 
 
@@ -27,13 +33,40 @@ class PostgresRetrievedDocumentRepository:
     ) -> None:
         self._session_factory = session_factory
 
-    async def save(
+    async def save(self, document: RetrievedDocument) -> None:
+        """Legacy/unfenced document bootstrap."""
+        await self._save(document, lease=None, task_id=None)
+
+    async def save_guarded(
         self,
         document: RetrievedDocument,
+        lease: ResearchRunLease,
+        *,
+        task_id: UUID,
+        run_repository: ResearchRunRepository,
+        research_repository: ResearchRepository,
+    ) -> None:
+        """Fenced retrieval update only for sources in the leased task."""
+        await self._save(document, lease=lease, task_id=task_id)
+
+    async def _save(
+        self,
+        document: RetrievedDocument,
+        *,
+        lease: ResearchRunLease | None,
+        task_id: UUID | None,
     ) -> None:
         """Insert or replace one source's latest retrieval outcome."""
         async with self._session_factory() as session:
             async with session.begin():
+                if lease is not None:
+                    assert task_id is not None
+                    await lock_fenced_stage(session, lease, task_id=task_id, stage=ResearchRunStatus.EXTRACTING)
+                    source = await session.get(ResearchSourceRow, document.source_id)
+                    if source is None or source.task_id != task_id:
+                        raise ResearchRunLeaseLostError(
+                            "Fenced document write refused: source belongs to another task."
+                        )
                 row = await session.get(
                     ResearchSourceDocumentRow,
                     document.source_id,

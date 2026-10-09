@@ -17,6 +17,7 @@ from enterprise_research.application.plan_repository import (
 from enterprise_research.application.repository import (
     ResearchRepository,
 )
+from enterprise_research.application.run_lease import ResearchRunLease
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
@@ -122,6 +123,8 @@ class ResearchSearchService:
         self,
         task_id: UUID,
         run_id: UUID,
+        *,
+        lease: ResearchRunLease | None = None,
     ) -> list[Source]:
         """Search all plan questions and persist de-duplicated sources."""
         aggregate = await self._research_repository.get(task_id)
@@ -223,7 +226,15 @@ class ResearchSearchService:
                     touched_source_ids.append(source_id)
 
         if changed:
-            await self._research_repository.save(aggregate)
+            if lease is None:
+                await self._research_repository.save(aggregate)
+            else:
+                await self._research_repository.save_guarded(
+                    aggregate,
+                    lease,
+                    ResearchRunStatus.SEARCHING,
+                    run_repository=self._run_repository,
+                )
 
         return [aggregate.sources[source_id].model_copy(deep=True) for source_id in touched_source_ids]
 

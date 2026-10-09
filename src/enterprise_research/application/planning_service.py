@@ -18,6 +18,7 @@ from enterprise_research.application.planner import (
 from enterprise_research.application.repository import (
     ResearchRepository,
 )
+from enterprise_research.application.run_lease import ResearchRunLease
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
@@ -46,6 +47,8 @@ class ResearchPlanningService:
         self,
         task_id: UUID,
         run_id: UUID,
+        *,
+        lease: ResearchRunLease | None = None,
     ) -> ResearchPlan:
         """Create a structured plan for a run in PLANNING state."""
         aggregate = await self._research_repository.get(task_id)
@@ -77,6 +80,9 @@ class ResearchPlanningService:
         if plan.task_id != task_id or plan.run_id != run_id:
             raise ResearchPlanningError("Planner returned a plan for a different task or run.")
 
-        await self._plan_repository.save(plan)
+        if lease is None:
+            await self._plan_repository.save(plan)
+        else:
+            await self._plan_repository.save_guarded(plan, lease, run_repository=self._run_repository)
 
         return plan
