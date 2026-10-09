@@ -11,6 +11,7 @@ from enterprise_research.application.errors import (
 from enterprise_research.application.repository import (
     ResearchRepository,
 )
+from enterprise_research.application.run_lease import ResearchRunLease
 from enterprise_research.application.run_recovery import (
     ResearchRunRecoveryCandidate,
 )
@@ -68,6 +69,8 @@ class ResearchRunApplicationService:
         task_id: UUID,
         run_id: UUID,
         next_status: ResearchRunStatus,
+        *,
+        lease: ResearchRunLease | None = None,
     ) -> ResearchRun:
         """Advance and persist one valid run transition."""
         run = await self.get_run(
@@ -75,9 +78,13 @@ class ResearchRunApplicationService:
             run_id,
         )
 
+        prior_status = run.status
         run.advance(next_status)
 
-        await self._run_repository.save(run)
+        if lease is None:
+            await self._run_repository.save(run)
+        else:
+            await self._run_repository.save_guarded(run, lease, expected_status=prior_status)
 
         return run
 
@@ -86,6 +93,8 @@ class ResearchRunApplicationService:
         task_id: UUID,
         run_id: UUID,
         error: str,
+        *,
+        lease: ResearchRunLease | None = None,
     ) -> ResearchRun:
         """Fail and persist a research run."""
         run = await self.get_run(
@@ -93,9 +102,13 @@ class ResearchRunApplicationService:
             run_id,
         )
 
+        prior_status = run.status
         run.fail(error)
 
-        await self._run_repository.save(run)
+        if lease is None:
+            await self._run_repository.save(run)
+        else:
+            await self._run_repository.save_guarded(run, lease, expected_status=prior_status)
 
         return run
 
@@ -115,3 +128,23 @@ class ResearchRunApplicationService:
 
         runs = await self._run_repository.list_unfinished(limit=limit, task_id=task_id)
         return [ResearchRunRecoveryCandidate.from_run(run) for run in runs]
+
+    async def claim_run_lease(
+        self,
+        task_id: UUID,
+        run_id: UUID,
+        owner_id: UUID,
+        *,
+        ttl_seconds: int,
+    ) -> ResearchRunLease | None:
+        """Only PENDING runs can be claimed by the normal executor."""
+        await self.get_run(task_id, run_id)
+        return await self._run_repository.claim_lease(run_id, owner_id, ttl_seconds=ttl_seconds)
+
+    async def renew_run_lease(self, lease: ResearchRunLease, *, ttl_seconds: int) -> ResearchRunLease | None:
+        """Heartbeat without changing the stage status."""
+        return await self._run_repository.renew_lease(lease, ttl_seconds=ttl_seconds)
+
+    async def release_run_lease(self, lease: ResearchRunLease) -> bool:
+        """Best-effort owner-specific release."""
+        return await self._run_repository.release_lease(lease)

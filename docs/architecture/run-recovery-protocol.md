@@ -51,8 +51,9 @@ orphaned or try to resume them. No unauthenticated administrative API is added.
 
 ## Work reserved for later stages
 
-- **3E-6D-2**: durable exclusive claim, lease expiration/heartbeat, fencing
-  tokens or conditional updates, and concurrent-worker protection.
+- **3E-6D-2**: durable exclusive claim, lease heartbeat, fencing tokens and
+  guarded Run transitions are now implemented; see
+  [`run-execution-leases.md`](run-execution-leases.md).
 - **3E-6D-3**: deterministic reconciliation rules and idempotent replay from
   stage-specific safe boundaries; cancellation vs. crash semantics.
 - **3E-6D-4**: define boundaries between Run status and LangGraph checkpoint

@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     Float,
@@ -408,6 +409,19 @@ class ResearchRunRow(Base):
     error: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
+    )
+    lease_owner_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        nullable=True,
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    lease_fencing_token: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        server_default="0",
     )
 
 

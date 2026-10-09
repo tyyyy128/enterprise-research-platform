@@ -54,6 +54,10 @@ from enterprise_research.application.retrieval_service import (
     ResearchRetrievalService,
     RetrievalSummary,
 )
+from enterprise_research.application.run_lease import (
+    ResearchRunLease,
+    ResearchRunLeaseLostError,
+)
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
@@ -82,6 +86,8 @@ __all__ = [
     "ResearchRepository",
     "ResearchRunApplicationService",
     "ResearchRunExecutor",
+    "ResearchRunLease",
+    "ResearchRunLeaseLostError",
     "ResearchRunNotFoundError",
     "ResearchRunRepository",
     "ResearchStageRunner",

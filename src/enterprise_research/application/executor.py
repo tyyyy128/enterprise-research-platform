@@ -5,9 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from enterprise_research.application.run_events import ResearchRunEventBus
+from enterprise_research.application.run_lease import (
+    ResearchRunLease,
+    ResearchRunLeaseLostError,
+    validate_lease_ttl,
+)
 from enterprise_research.application.run_service import (
     ResearchRunApplicationService,
 )
@@ -58,7 +63,12 @@ class ResearchRunExecutor:
         application: ResearchRunApplicationService,
         stage_runner: ResearchStageRunner,
         event_bus: ResearchRunEventBus | None = None,
+        *,
+        lease_ttl_seconds: int = 30,
     ) -> None:
+        validate_lease_ttl(lease_ttl_seconds)
+        self._lease_ttl_seconds = lease_ttl_seconds
+        self._owner_id = uuid4()
         self._application = application
         self._stage_runner = stage_runner
         self._event_bus = event_bus
@@ -111,54 +121,118 @@ class ResearchRunExecutor:
 
         self._tasks.clear()
 
+    async def _heartbeat(
+        self,
+        lease: ResearchRunLease,
+        executing_task: asyncio.Task[None],
+        stop: asyncio.Event,
+    ) -> None:
+        """Renew in parallel with long-running stage work.
+
+        A lost lease cancels the execution coroutine; it must never mark the
+        run FAILED with the stale token. External effects still require
+        idempotency or fencing at their own persistence boundary.
+        """
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=self._lease_ttl_seconds / 3)
+                return
+            except TimeoutError:
+                pass
+            try:
+                renewed = await self._application.renew_run_lease(lease, ttl_seconds=self._lease_ttl_seconds)
+            except Exception:
+                logger.exception("Research run lease heartbeat failed for %s", lease.run_id)
+                executing_task.cancel()
+                return
+            if renewed is None:
+                if stop.is_set():
+                    return
+                logger.warning("Research run lease lost for %s", lease.run_id)
+                executing_task.cancel()
+                return
+
     async def _execute(
         self,
         task_id: UUID,
         run_id: UUID,
     ) -> None:
+        lease: ResearchRunLease | None = None
+        heartbeat: asyncio.Task[None] | None = None
+        stop = asyncio.Event()
         try:
+            # The row must be atomically claimed BEFORE entering any stage.
+            lease = await self._application.claim_run_lease(
+                task_id,
+                run_id,
+                self._owner_id,
+                ttl_seconds=self._lease_ttl_seconds,
+            )
+            if lease is None:
+                if self._event_bus is not None:
+                    await self._event_bus.publish_interruption(task_id, run_id)
+                return
+
+            current_task = asyncio.current_task()
+            assert current_task is not None
+            heartbeat = asyncio.create_task(
+                self._heartbeat(lease, current_task, stop),
+                name=f"enterprise-research-heartbeat:{run_id}",
+            )
+
             for stage in self._STAGES:
-                await self._application.advance_run(
-                    task_id,
-                    run_id,
-                    stage,
-                )
+                await self._application.advance_run(task_id, run_id, stage, lease=lease)
+                if stage == ResearchRunStatus.COMPLETED:
+                    # Avoid renewal racing the terminal commit/SSE event.
+                    stop.set()
 
                 if self._event_bus is not None:
                     await self._event_bus.publish_stage(task_id, run_id, stage)
 
                 if stage != ResearchRunStatus.COMPLETED:
-                    await self._stage_runner.run_stage(
-                        task_id,
-                        run_id,
-                        stage,
-                    )
+                    await self._stage_runner.run_stage(task_id, run_id, stage)
 
         except asyncio.CancelledError:
             if self._event_bus is not None:
                 await self._event_bus.publish_interruption(task_id, run_id)
             raise
 
+        except ResearchRunLeaseLostError:
+            # The run might now belong to another worker. Never persist a
+            # FAILED transition (or a success event) using a stale token.
+            logger.warning("Ignoring stale run transition for %s", run_id)
+            if self._event_bus is not None:
+                await self._event_bus.publish_interruption(task_id, run_id)
+
         except Exception as exc:
             message = str(exc).strip() or exc.__class__.__name__
-
             try:
-                await self._application.fail_run(
-                    task_id,
-                    run_id,
-                    message,
-                )
+                if lease is None:
+                    raise ResearchRunLeaseLostError("Run execution never acquired a lease.")
+                await self._application.fail_run(task_id, run_id, message, lease=lease)
+            except ResearchRunLeaseLostError:
+                logger.warning("Cannot fail run %s after losing its lease", run_id)
+                if self._event_bus is not None:
+                    await self._event_bus.publish_interruption(task_id, run_id)
             except Exception:
-                logger.exception(
-                    "Failed to persist research run failure for %s",
-                    run_id,
-                )
+                logger.exception("Failed to persist research run failure for %s", run_id)
                 if self._event_bus is not None:
                     await self._event_bus.publish_interruption(task_id, run_id)
                 raise
+            else:
+                if self._event_bus is not None:
+                    await self._event_bus.publish_failure(task_id, run_id, message)
 
-            if self._event_bus is not None:
-                await self._event_bus.publish_failure(task_id, run_id, message)
+        finally:
+            stop.set()
+            if heartbeat is not None:
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
+            if lease is not None:
+                try:
+                    await self._application.release_run_lease(lease)
+                except Exception:
+                    logger.exception("Could not release lease for research run %s", run_id)
 
     def _task_done(
         self,
