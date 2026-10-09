@@ -13,16 +13,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
-from enterprise_research.application.document_repository import RetrievedDocumentRepository
-from enterprise_research.application.graph_checkpoint import (
-    ResearchGraphCheckpointBinding,
-    ResearchGraphCheckpointConflictError,
-    ResearchGraphCheckpointReader,
+from enterprise_research.application.checkpoint_consistency import (
+    ResearchStageCheckpointReconciliation,
+    reconcile_stage_checkpoint,
 )
+from enterprise_research.application.document_repository import RetrievedDocumentRepository
+from enterprise_research.application.graph_checkpoint import ResearchGraphCheckpointReader
 from enterprise_research.application.plan_repository import ResearchPlanRepository
 from enterprise_research.application.repository import ResearchRepository
 from enterprise_research.application.run_service import ResearchRunApplicationService
-from enterprise_research.application.stage_journal import ResearchStageOutcome
 from enterprise_research.domain import ResearchRunStatus, RetrievalStatus, SourceType
 
 STAGE_ORDER = (
@@ -52,6 +51,7 @@ class ResearchResumeDecision:
     next_stage: ResearchRunStatus | None
     reason: str
     proof_digest: str | None = None
+    checkpoint_reconciliations: tuple[ResearchStageCheckpointReconciliation, ...] = ()
 
 
 class ResearchSafeResumeInspector:
@@ -79,6 +79,7 @@ class ResearchSafeResumeInspector:
 
     async def inspect(self, task_id: UUID, run_id: UUID) -> ResearchResumeDecision:
         run = await self._runs.get_run(task_id, run_id)
+        reconciliations: list[ResearchStageCheckpointReconciliation] = []
 
         def decision(
             disposition: ResearchResumeDisposition,
@@ -91,7 +92,9 @@ class ResearchSafeResumeInspector:
             if artifacts is not None:
                 canonical = json.dumps(artifacts, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
                 digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            return ResearchResumeDecision(task_id, run_id, run.status, disposition, next_stage, reason, digest)
+            return ResearchResumeDecision(
+                task_id, run_id, run.status, disposition, next_stage, reason, digest, tuple(reconciliations)
+            )
 
         if run.is_terminal:
             return decision(ResearchResumeDisposition.TERMINAL, "Terminal runs cannot be resumed.")
@@ -104,35 +107,31 @@ class ResearchSafeResumeInspector:
         attempts = await self._runs.inspect_stage_attempts(task_id, run_id)
         proof: list[object] = []
         for stage in STAGE_ORDER[: current_index + 1]:
-            entries = [attempt for attempt in attempts if attempt.stage == stage]
-            if len(entries) != 1 or entries[0].outcome != ResearchStageOutcome.COMPLETED:
-                return decision(
-                    ResearchResumeDisposition.PAUSED,
-                    f"Stage {stage.value} has missing, duplicate, failed or in-doubt attempts.",
-                )
+            check = await reconcile_stage_checkpoint(
+                task_id=task_id,
+                run_id=run_id,
+                stage=stage,
+                attempts=attempts,
+                reader=self._graph_checkpoints,
+            )
+            reconciliations.append(check)
+            if not check.may_verify_artifacts:
+                reason = check.pause_reason or f"Unsafe journal/checkpoint reconciliation for {stage.value}."
+                return decision(ResearchResumeDisposition.PAUSED, reason)
+
+            # Checkpoint observations are advisory and are included only in the
+            # pre-/post-claim proof.  The Journal and durable business artifacts
+            # still determine whether a stage can actually be skipped.
+            entry = next(attempt for attempt in attempts if attempt.stage == stage)
             proof.append(
                 (
                     stage.value,
-                    entries[0].fencing_token,
-                    entries[0].started_at.isoformat(),
-                    entries[0].finished_at.isoformat() if entries[0].finished_at else None,
+                    entry.fencing_token,
+                    entry.started_at.isoformat(),
+                    entry.finished_at.isoformat() if entry.finished_at else None,
                 )
             )
-            if self._graph_checkpoints is not None:
-                binding = ResearchGraphCheckpointBinding(task_id, run_id, stage, entries[0].fencing_token)
-                try:
-                    reference = await self._graph_checkpoints.latest(binding)
-                except ResearchGraphCheckpointConflictError:
-                    return decision(
-                        ResearchResumeDisposition.PAUSED, "Graph checkpoint identity conflicts with stage journal."
-                    )
-                if reference is not None:
-                    if reference.binding != binding:
-                        return decision(
-                            ResearchResumeDisposition.PAUSED, "Graph checkpoint has a mismatched Run binding."
-                        )
-                    # Advisory fingerprint only: checkpoints do not prove business completion.
-                    proof.append(("graph_checkpoint", stage.value, reference.checkpoint_id))
+            proof.append(check.proof_marker)
         if any(attempt.stage in STAGE_ORDER[current_index + 1 :] for attempt in attempts):
             return decision(ResearchResumeDisposition.PAUSED, "Journal contains a future-stage attempt.")
 

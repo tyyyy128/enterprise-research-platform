@@ -1,5 +1,10 @@
 """Enterprise Research application layer."""
 
+from enterprise_research.application.checkpoint_consistency import (
+    ResearchCheckpointObservation,
+    ResearchStageCheckpointReconciliation,
+    reconcile_stage_checkpoint,
+)
 from enterprise_research.application.document_chunking import (
     DocumentChunkingSettings,
     chunk_document,
@@ -94,6 +99,9 @@ from enterprise_research.application.stage_journal import (
 )
 
 __all__ = [
+    "ResearchCheckpointObservation",
+    "ResearchStageCheckpointReconciliation",
+    "reconcile_stage_checkpoint",
     "LangGraphCheckpointReader",
     "ResearchGraphCheckpointBinding",
     "ResearchGraphCheckpointConflictError",
