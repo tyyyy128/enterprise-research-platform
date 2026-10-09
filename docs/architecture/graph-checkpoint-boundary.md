@@ -7,8 +7,9 @@ Checkpoint 边界，不假设当前 `deerflow-extension-api>=0.2,<0.3` 会暴露
 或其 Checkpointer。本阶段既不安装 LangGraph，也不创建假的持久化 Checkpointer。
 
 * `ResearchGraphCheckpointBinding`：用 `task_id`、`run_id`、研究阶段、`fencing_token`
-  生成确定的 `thread_id` 和 `checkpoint_ns`。新一代执行权具有不同命名空间，
-  避免旧 Worker 的 Graph 状态被误识别为新 Worker 的 Graph 状态。
+  生成确定的 `thread_id` 和 `checkpoint_ns`。实际接入顶层 LangGraph 后，`checkpoint_ns`
+  必须为根命名空间 `""`，因此阶段、代次的隔离信息位于 `thread_id` 中（v2 布局）。
+  新一代执行权使用不同 Thread，避免旧 Worker 的 Graph 状态被误识别为新 Worker 的状态。
 * `LangGraphCheckpointReader`：接受由**可信集成层明确传入**的、实现 `aget_tuple(config)`
   的真实异步 Saver；读取并校验检查点的 Thread/Namespace/Checkpoint ID，
   只向领域层返回不可变的标识，不暴露 Graph 内部消息和状态内容。
@@ -25,7 +26,7 @@ Checkpoint 边界，不假设当前 `deerflow-extension-api>=0.2,<0.3` 会暴露
 
 `Stage Journal=completed` 仍不等于业务原子提交。即便 Checkpoint 存在，
 `Safe Resume` 仍按 3E-6D-3C 的保守规则核对完整 Plan、Search 来源和 Retrieval 结果。
-旧 Worker 即使继续写入自己旧 generation 的 Graph Namespace，也不能借此通过
+旧 Worker 即使继续写入自己旧 generation 的 Graph Thread，也不能借此通过
 现有业务 `save_guarded()` 的 Fencing 检验。**隔离命名空间不能替代数据库写保护**。
 
 ## 持久化不一致时的处理

@@ -46,6 +46,9 @@ from enterprise_research.application.graph_checkpoint import (
     ResearchGraphCheckpointReader,
     ResearchGraphCheckpointReference,
 )
+from enterprise_research.application.langgraph_runtime import (
+    ResearchLangGraphStageRunner,
+)
 from enterprise_research.application.pipeline import (
     ResearchPipelineStageRunner,
 )
@@ -107,6 +110,7 @@ __all__ = [
     "ResearchGraphCheckpointConflictError",
     "ResearchGraphCheckpointReader",
     "ResearchGraphCheckpointReference",
+    "ResearchLangGraphStageRunner",
     "ResearchApplicationError",
     "ResearchApplicationService",
     "ResearchPipelineStageRunner",

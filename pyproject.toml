@@ -17,6 +17,10 @@ dependencies = [
 [project.entry-points."deerflow.extensions"]
 enterprise-research = "enterprise_research:install"
 [project.optional-dependencies]
+langgraph = [
+    "langgraph>=1.2,<2",
+    "langgraph-checkpoint-postgres>=3,<4",
+]
 dev = [
     "alembic>=1.13,<2",
     "pytest>=9,<10",

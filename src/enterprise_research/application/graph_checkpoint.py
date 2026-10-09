@@ -46,13 +46,16 @@ class ResearchGraphCheckpointBinding:
 
     @property
     def thread_id(self) -> str:
-        """Isolate research runs from DeerFlow conversation thread IDs."""
-        return f"enterprise-research:v1:{self.task_id}:{self.run_id}"
+        """Isolate each Run, stage and fenced attempt using a root-Graph thread."""
+        # A top-level StateGraph always persists under checkpoint_ns="".
+        # Put stage/generation in thread_id rather than a custom namespace.
+        # v2 avoids interpreting older (v1, custom-namespace) identities as v2.
+        return f"enterprise-research:v2:{self.task_id}:{self.run_id}:{self.stage.value}:generation:{self.fencing_token}"
 
     @property
     def checkpoint_ns(self) -> str:
-        """Keep older fencing generations from overwriting a replacement's state."""
-        return f"research/{self.stage.value}/generation/{self.fencing_token}"
+        """Top-level LangGraph checkpoints always use the root namespace."""
+        return ""
 
     def runnable_config(self) -> dict[str, dict[str, str]]:
         """Return LangGraph-compatible config without importing its runtime."""

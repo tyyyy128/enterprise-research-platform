@@ -65,22 +65,24 @@ def test_checkpoint_binding_is_stable_isolated_and_fenced():
     }
     assert str(binding.task_id) in binding.thread_id
     assert str(binding.run_id) in binding.thread_id
-    assert "searching" in binding.checkpoint_ns
+    assert "searching" in binding.thread_id
+    assert ":generation:7" in binding.thread_id
+    assert binding.checkpoint_ns == ""
     assert binding == ResearchGraphCheckpointBinding(
         binding.task_id, binding.run_id, binding.stage, binding.fencing_token
     )
     assert binding.runnable_config() == binding.runnable_config()
     assert (
-        binding.checkpoint_ns
+        binding.thread_id
         != ResearchGraphCheckpointBinding(
             binding.task_id, binding.run_id, binding.stage, binding.fencing_token + 1
-        ).checkpoint_ns
+        ).thread_id
     )
     assert (
-        binding.checkpoint_ns
+        binding.thread_id
         != ResearchGraphCheckpointBinding(
             binding.task_id, binding.run_id, ResearchRunStatus.PLANNING, binding.fencing_token
-        ).checkpoint_ns
+        ).thread_id
     )
     assert (
         binding.thread_id

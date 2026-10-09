@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import AsyncExitStack
 from typing import Any
 from uuid import UUID
 
@@ -31,6 +32,7 @@ from enterprise_research.api import (
 from enterprise_research.api.sse import encode_run_event
 from enterprise_research.application import (
     ResearchApplicationService,
+    ResearchLangGraphStageRunner,
     ResearchPipelineStageRunner,
     ResearchPlanningService,
     ResearchRetrievalService,
@@ -51,6 +53,7 @@ from enterprise_research.application.evidence_extraction_service import (
 from enterprise_research.application.evidence_workload import (
     EvidenceWorkloadSettings,
 )
+from enterprise_research.application.graph_checkpoint import LangGraphCheckpointReader
 from enterprise_research.application.run_events import (
     ResearchRunEventBus,
     RunEventHistoryExpired,
@@ -122,6 +125,7 @@ class EnterpriseResearchService:
         self._run_executor: ResearchRunExecutor | None = None
         self._run_event_bus: ResearchRunEventBus | None = None
         self._engine: AsyncEngine | None = None
+        self._graph_checkpoint_stack: AsyncExitStack | None = None
 
     async def start(
         self,
@@ -468,6 +472,31 @@ class EnterpriseResearchService:
                     "'openai-compatible'."
                 )
 
+            # DeerFlow does NOT expose the host saver through ExtensionRuntimeDeps.
+            # Keep research checkpoints extension-owned and opt-in; do not
+            # touch the host Agent's checkpoint namespace or lifecycle.
+            graph_checkpoints = None
+            graph_backend = os.getenv("ENTERPRISE_RESEARCH_GRAPH_BACKEND", "disabled").strip().lower()
+            if graph_backend == "postgres":
+                if repository_backend != "postgres":
+                    raise RuntimeError("LangGraph PostgreSQL stages require ENTERPRISE_RESEARCH_REPOSITORY=postgres.")
+                if planner_backend == "disabled":
+                    raise RuntimeError("LangGraph stage execution requires an enabled research planner backend.")
+                dsn = _required_env("ENTERPRISE_RESEARCH_GRAPH_CHECKPOINT_DSN")
+                try:
+                    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+                except ImportError as exc:
+                    raise RuntimeError("Install the Enterprise Research 'langgraph' optional dependencies.") from exc
+
+                stack = AsyncExitStack()
+                self._graph_checkpoint_stack = stack
+                saver = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(dsn))
+                await saver.setup()
+                graph_checkpoints = LangGraphCheckpointReader(saver)
+                stage_runner = ResearchLangGraphStageRunner(stage_runner, saver)
+            elif graph_backend != "disabled":
+                raise RuntimeError("ENTERPRISE_RESEARCH_GRAPH_BACKEND must be 'disabled' or 'postgres'.")
+
             run_executor = ResearchRunExecutor(
                 run_application,
                 stage_runner,
@@ -477,10 +506,14 @@ class EnterpriseResearchService:
                     research_repository,
                     plan_repository,
                     document_repository,
+                    graph_checkpoints=graph_checkpoints,
                 ),
             )
 
         except Exception:
+            if self._graph_checkpoint_stack is not None:
+                await self._graph_checkpoint_stack.aclose()
+                self._graph_checkpoint_stack = None
             if self._engine is not None:
                 await self._engine.dispose()
                 self._engine = None
@@ -554,6 +587,10 @@ class EnterpriseResearchService:
         self._application = None
         self._run_application = None
         self._run_event_bus = None
+
+        if self._graph_checkpoint_stack is not None:
+            await self._graph_checkpoint_stack.aclose()
+            self._graph_checkpoint_stack = None
 
         if self._engine is not None:
             await self._engine.dispose()
