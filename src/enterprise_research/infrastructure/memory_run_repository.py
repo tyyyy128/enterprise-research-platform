@@ -32,3 +32,19 @@ class InMemoryResearchRunRepository:
                 return None
 
             return run.model_copy(deep=True)
+
+    async def list_unfinished(self, *, limit: int, task_id: UUID | None = None) -> list[ResearchRun]:
+        """Return detached nonterminal snapshots ordered by update time/ID."""
+        if limit < 1:
+            raise ValueError("Recovery scan limit must be positive.")
+
+        async with self._lock:
+            unfinished = sorted(
+                (
+                    run
+                    for run in self._items.values()
+                    if not run.is_terminal and (task_id is None or run.task_id == task_id)
+                ),
+                key=lambda run: (run.updated_at, run.run_id),
+            )
+            return [run.model_copy(deep=True) for run in unfinished[:limit]]

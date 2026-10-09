@@ -11,6 +11,9 @@ from enterprise_research.application.errors import (
 from enterprise_research.application.repository import (
     ResearchRepository,
 )
+from enterprise_research.application.run_recovery import (
+    ResearchRunRecoveryCandidate,
+)
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
@@ -95,3 +98,20 @@ class ResearchRunApplicationService:
         await self._run_repository.save(run)
 
         return run
+
+    async def inspect_unfinished_runs(
+        self,
+        *,
+        limit: int = 100,
+        task_id: UUID | None = None,
+    ) -> list[ResearchRunRecoveryCandidate]:
+        """Inspect persisted unfinished work without claiming or re-running it.
+
+        A PENDING run still needs an exclusive owner claim; an in-progress
+        run needs stage-side-effect reconciliation. Neither is auto-resumed.
+        """
+        if not 1 <= limit <= 500:
+            raise ValueError("Recovery inspection limit must be between 1 and 500.")
+
+        runs = await self._run_repository.list_unfinished(limit=limit, task_id=task_id)
+        return [ResearchRunRecoveryCandidate.from_run(run) for run in runs]

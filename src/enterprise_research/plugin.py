@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 from uuid import UUID
@@ -98,6 +99,8 @@ from enterprise_research.infrastructure.searching import (
     TavilySearchSettings,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _required_env(name: str) -> str:
     value = os.getenv(name, "").strip()
@@ -166,6 +169,18 @@ class EnterpriseResearchService:
                 research_repository,
                 run_repository,
             )
+
+            # PostgreSQL survives process restarts. Inventory unfinished runs
+            # but never replay them here: ownership and stage effects must
+            # first be checked by a separate recovery worker.
+            if repository_backend == "postgres":
+                candidates = await run_application.inspect_unfinished_runs()
+                if candidates:
+                    logger.warning(
+                        "Found %d persisted unfinished research runs at startup "
+                        "(up to 100 inspected); no automatic replay was attempted",
+                        len(candidates),
+                    )
 
             run_event_bus = ResearchRunEventBus()
 

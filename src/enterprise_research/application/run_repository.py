@@ -16,3 +16,6 @@ class ResearchRunRepository(Protocol):
 
     async def get(self, run_id: UUID) -> ResearchRun | None:
         """Return a research run by ID."""
+
+    async def list_unfinished(self, *, limit: int, task_id: UUID | None = None) -> list[ResearchRun]:
+        """Oldest nonterminal runs first; read-only and bounded."""

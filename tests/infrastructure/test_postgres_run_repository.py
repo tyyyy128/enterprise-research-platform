@@ -110,3 +110,39 @@ def test_aggregate_resave_preserves_research_run() -> None:
             await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_postgres_recovery_inventory_survives_repository_recreation() -> None:
+    async def run() -> None:
+        settings = PostgresSettings.from_env()
+        engine = build_async_engine(settings)
+        session_factory = build_session_factory(engine)
+        aggregate_repository = PostgresResearchRepository(session_factory)
+        repository = PostgresResearchRunRepository(session_factory)
+        aggregate = ResearchAggregate.create("Recover unfinished research runs")
+        pending = ResearchRun.create(aggregate.task.task_id)
+        in_flight = ResearchRun.create(aggregate.task.task_id)
+        failed = ResearchRun.create(aggregate.task.task_id)
+
+        try:
+            await aggregate_repository.save(aggregate)
+            in_flight.advance(ResearchRunStatus.PLANNING)
+            failed.fail("already terminated")
+            for research_run in (pending, in_flight, failed):
+                await repository.save(research_run)
+
+            # Simulates a fresh adapter after a process restart. This is a
+            # read-only scan and must not claim or advance either run.
+            reopened = PostgresResearchRunRepository(session_factory)
+            candidates = await reopened.list_unfinished(limit=10, task_id=aggregate.task.task_id)
+            assert {run.run_id for run in candidates} == {pending.run_id, in_flight.run_id}
+            assert (await reopened.get(in_flight.run_id)).status == ResearchRunStatus.PLANNING
+            assert (await reopened.get(failed.run_id)).status == ResearchRunStatus.FAILED
+
+        finally:
+            async with session_factory() as session:
+                async with session.begin():
+                    await session.execute(delete(ResearchTaskRow).where(ResearchTaskRow.id == aggregate.task.task_id))
+            await engine.dispose()
+
+    asyncio.run(run())
