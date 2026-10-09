@@ -34,6 +34,13 @@ from enterprise_research.application.executor import (
     ResearchStageRunner,
     SkeletonResearchStageRunner,
 )
+from enterprise_research.application.graph_checkpoint import (
+    LangGraphCheckpointReader,
+    ResearchGraphCheckpointBinding,
+    ResearchGraphCheckpointConflictError,
+    ResearchGraphCheckpointReader,
+    ResearchGraphCheckpointReference,
+)
 from enterprise_research.application.pipeline import (
     ResearchPipelineStageRunner,
 )
@@ -87,6 +94,11 @@ from enterprise_research.application.stage_journal import (
 )
 
 __all__ = [
+    "LangGraphCheckpointReader",
+    "ResearchGraphCheckpointBinding",
+    "ResearchGraphCheckpointConflictError",
+    "ResearchGraphCheckpointReader",
+    "ResearchGraphCheckpointReference",
     "ResearchApplicationError",
     "ResearchApplicationService",
     "ResearchPipelineStageRunner",

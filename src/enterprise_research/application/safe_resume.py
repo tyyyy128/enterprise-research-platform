@@ -14,6 +14,11 @@ from enum import StrEnum
 from uuid import UUID
 
 from enterprise_research.application.document_repository import RetrievedDocumentRepository
+from enterprise_research.application.graph_checkpoint import (
+    ResearchGraphCheckpointBinding,
+    ResearchGraphCheckpointConflictError,
+    ResearchGraphCheckpointReader,
+)
 from enterprise_research.application.plan_repository import ResearchPlanRepository
 from enterprise_research.application.repository import ResearchRepository
 from enterprise_research.application.run_service import ResearchRunApplicationService
@@ -63,11 +68,14 @@ class ResearchSafeResumeInspector:
         research: ResearchRepository,
         plans: ResearchPlanRepository,
         documents: RetrievedDocumentRepository,
+        *,
+        graph_checkpoints: ResearchGraphCheckpointReader | None = None,
     ) -> None:
         self._runs = runs
         self._research = research
         self._plans = plans
         self._documents = documents
+        self._graph_checkpoints = graph_checkpoints
 
     async def inspect(self, task_id: UUID, run_id: UUID) -> ResearchResumeDecision:
         run = await self._runs.get_run(task_id, run_id)
@@ -110,6 +118,21 @@ class ResearchSafeResumeInspector:
                     entries[0].finished_at.isoformat() if entries[0].finished_at else None,
                 )
             )
+            if self._graph_checkpoints is not None:
+                binding = ResearchGraphCheckpointBinding(task_id, run_id, stage, entries[0].fencing_token)
+                try:
+                    reference = await self._graph_checkpoints.latest(binding)
+                except ResearchGraphCheckpointConflictError:
+                    return decision(
+                        ResearchResumeDisposition.PAUSED, "Graph checkpoint identity conflicts with stage journal."
+                    )
+                if reference is not None:
+                    if reference.binding != binding:
+                        return decision(
+                            ResearchResumeDisposition.PAUSED, "Graph checkpoint has a mismatched Run binding."
+                        )
+                    # Advisory fingerprint only: checkpoints do not prove business completion.
+                    proof.append(("graph_checkpoint", stage.value, reference.checkpoint_id))
         if any(attempt.stage in STAGE_ORDER[current_index + 1 :] for attempt in attempts):
             return decision(ResearchResumeDisposition.PAUSED, "Journal contains a future-stage attempt.")
 
