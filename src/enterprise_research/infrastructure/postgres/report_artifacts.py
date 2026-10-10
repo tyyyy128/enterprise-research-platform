@@ -26,6 +26,7 @@ from enterprise_research.application.run_lease import ResearchRunLease
 from enterprise_research.application.stage_completion import evidence_fingerprint
 from enterprise_research.application.stage_journal import ResearchStageOutcome
 from enterprise_research.domain import ClaimStatus, ResearchRunStatus
+from enterprise_research.infrastructure.postgres.claim_verification import validate_run_claim_verification_receipt
 from enterprise_research.infrastructure.postgres.fenced_writes import lock_fenced_stage
 from enterprise_research.infrastructure.postgres.models import (
     ClaimEvidenceRow,
@@ -33,6 +34,8 @@ from enterprise_research.infrastructure.postgres.models import (
     ResearchEvidenceManifestRow,
     ResearchEvidenceRow,
     ResearchPlanRow,
+    ResearchRunClaimGenerationRow,
+    ResearchRunClaimVerificationRow,
     ResearchRunReportRow,
     ResearchSourceRow,
     ResearchStageAttemptRow,
@@ -82,9 +85,24 @@ async def _make_run_draft(session: AsyncSession, *, task_id: UUID, run_id: UUID,
         )
     ).all()
     if not claims:
-        raise ResearchReportWritingError(
-            "WRITING requires at least one supported Claim; automatic Claim verification is not implemented."
+        raise ResearchReportWritingError("WRITING requires at least one supported, evidence-verified Claim.")
+
+    # If this Run has 3F candidate provenance, only its independently 3G-
+    # verified SUPPORTED candidates may enter the final report. Task-level
+    # manual/older SUPPORTED Claims cannot impersonate this Run's decisions.
+    generation = await session.get(ResearchRunClaimGenerationRow, run_id, with_for_update=True)
+    if generation is not None:
+        await validate_run_claim_verification_receipt(
+            session, task_id=task_id, run_id=run_id, fencing_token=fencing_token, required=True
         )
+        verification = await session.get(ResearchRunClaimVerificationRow, run_id, with_for_update=True)
+        assert verification is not None
+        verified_ids = {
+            item["claim_id"] for item in verification.verdicts if item["status"] == ClaimStatus.SUPPORTED.value
+        }
+        claims = [claim for claim in claims if str(claim.id) in verified_ids]
+        if not claims:
+            raise ResearchReportWritingError("WRITING found no SUPPORTED candidates verified for this Run.")
 
     links = (
         await session.scalars(

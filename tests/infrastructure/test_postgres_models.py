@@ -15,6 +15,7 @@ def test_expected_postgres_tables_are_registered() -> None:
         "research_run_evidence_manifests",
         "research_run_report_artifacts",
         "research_run_claim_generations",
+        "research_run_claim_verifications",
         "research_plan_questions",
         "research_plans",
         "report_claims",
@@ -128,4 +129,17 @@ def test_run_claim_generation_receipt_is_run_scoped() -> None:
         "ck_run_claim_generation_output_hash",
         "ck_run_claim_generation_evidence",
         "ck_run_claim_generation_claims",
+    }
+
+
+def test_run_claim_verification_receipt_is_fenced_and_run_scoped() -> None:
+    table = Base.metadata.tables["research_run_claim_verifications"]
+    assert {column.name for column in table.primary_key.columns} == {"run_id"}
+    assert {fk.target_fullname for fk in table.foreign_keys} == {"research_runs.id", "research_tasks.id"}
+    assert {constraint.name for constraint in table.constraints if constraint.name} >= {
+        "ck_run_claim_verification_fencing",
+        "ck_run_claim_verification_input",
+        "ck_run_claim_verification_output",
+        "ck_run_claim_verification_verdicts",
+        "ck_run_claim_verification_limits",
     }

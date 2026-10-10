@@ -22,6 +22,7 @@ from enterprise_research.application.stage_completion import (
 )
 from enterprise_research.domain import ResearchRunStatus, RetrievalStatus, SourceType
 from enterprise_research.infrastructure.postgres.claim_generation_receipt import validate_run_claim_receipt
+from enterprise_research.infrastructure.postgres.claim_verification import validate_run_claim_verification_receipt
 from enterprise_research.infrastructure.postgres.models import (
     ResearchEvidenceManifestRow,
     ResearchEvidenceRow,
@@ -253,3 +254,4 @@ async def validate_persisted_stage_artifacts(
     base["manifest_problem"] = problem
     ResearchStageCompletionValidator.validate(stage, StageArtifactSnapshot(**base))
     await validate_run_claim_receipt(session, task_id=task_id, run_id=run_id, fencing_token=fencing_token)
+    await validate_run_claim_verification_receipt(session, task_id=task_id, run_id=run_id, fencing_token=fencing_token)

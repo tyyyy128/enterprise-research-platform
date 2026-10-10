@@ -533,6 +533,42 @@ class ResearchRunClaimGenerationRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ResearchRunClaimVerificationRow(Base):
+    """Write-once Run/Fencing verdicts; Claim status changes are same-transaction."""
+
+    __tablename__ = "research_run_claim_verifications"
+    __table_args__ = (
+        CheckConstraint("fencing_token > 0", name="ck_run_claim_verification_fencing"),
+        CheckConstraint("candidate_count >= 0", name="ck_run_claim_verification_count"),
+        CheckConstraint("length(input_sha256) = 64", name="ck_run_claim_verification_input"),
+        CheckConstraint("length(verdicts_sha256) = 64", name="ck_run_claim_verification_output"),
+        CheckConstraint("length(generation_input_sha256) = 64", name="ck_run_claim_verification_gen_input"),
+        CheckConstraint("length(generation_output_sha256) = 64", name="ck_run_claim_verification_gen_output"),
+        CheckConstraint("length(btrim(verifier_model)) > 0", name="ck_run_claim_verification_model"),
+        CheckConstraint("jsonb_typeof(claim_ids) = 'array'", name="ck_run_claim_verification_claims"),
+        CheckConstraint("jsonb_typeof(verdicts) = 'array'", name="ck_run_claim_verification_verdicts"),
+        CheckConstraint("jsonb_typeof(limits) = 'object'", name="ck_run_claim_verification_limits"),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    task_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    generation_input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    generation_output_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    verdicts_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    claim_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    verdicts: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    limits: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    verifier_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ResearchRunReportRow(Base):
     """Write-once, run/generation-scoped evidence-backed report snapshot."""
 

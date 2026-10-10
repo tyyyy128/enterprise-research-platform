@@ -46,3 +46,7 @@ class ResearchReportWritingError(ResearchStageCompletionError):
 
 class ResearchClaimGenerationError(ResearchStageCompletionError):
     """Claim proposals could not be generated or persisted with valid provenance."""
+
+
+class ResearchClaimVerificationError(ResearchStageCompletionError):
+    """Claim verification failed semantic/snapshot/quote/fencing checks."""

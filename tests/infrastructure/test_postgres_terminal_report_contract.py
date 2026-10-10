@@ -249,7 +249,7 @@ def test_postgres_missing_supported_claim_never_writes_report():
         try:
             _, runs, reports, aggregate, run, lease = await _build_verified_run(sessions, with_supported_claim=False)
             task_id, run_id = aggregate.task.task_id, run.run_id
-            with pytest.raises(ResearchReportWritingError, match="supported Claim"):
+            with pytest.raises(ResearchReportWritingError, match="supported, evidence-verified Claim"):
                 await reports.write_guarded(task_id, run_id, lease)
             assert await reports.get(task_id, run_id) is None
             with pytest.raises(ResearchReportWritingError, match="artifact"):

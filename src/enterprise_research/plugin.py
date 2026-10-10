@@ -46,6 +46,10 @@ from enterprise_research.application import (
     SkeletonResearchStageRunner,
 )
 from enterprise_research.application.claim_generation import ClaimGenerationLimits, ResearchClaimGenerationService
+from enterprise_research.application.claim_verification import (
+    ClaimVerificationLimits,
+    ResearchClaimVerificationService,
+)
 from enterprise_research.application.document_chunking import (
     DocumentChunkingSettings,
 )
@@ -80,6 +84,10 @@ from enterprise_research.infrastructure.claim_generation import (
     OpenAICompatibleClaimGenerator,
     OpenAICompatibleClaimGeneratorSettings,
 )
+from enterprise_research.infrastructure.claim_verification import (
+    OpenAICompatibleClaimVerifier,
+    OpenAICompatibleClaimVerifierSettings,
+)
 from enterprise_research.infrastructure.evidence_extraction import (
     OpenAICompatibleEvidenceExtractor,
     OpenAICompatibleEvidenceExtractorSettings,
@@ -100,6 +108,7 @@ from enterprise_research.infrastructure.postgres import (
     build_session_factory,
 )
 from enterprise_research.infrastructure.postgres.claim_generation import PostgresResearchClaimGenerationRepository
+from enterprise_research.infrastructure.postgres.claim_verification import PostgresResearchClaimVerificationRepository
 from enterprise_research.infrastructure.postgres.evidence_manifest_repository import (
     PostgresResearchEvidenceManifestRepository,
 )
@@ -230,6 +239,15 @@ class EnterpriseResearchService:
             claim_backend = os.getenv("ENTERPRISE_RESEARCH_CLAIM_BACKEND", "disabled").strip().lower()
             if claim_backend not in {"disabled", "openai-compatible"}:
                 raise RuntimeError("ENTERPRISE_RESEARCH_CLAIM_BACKEND must be 'disabled' or 'openai-compatible'.")
+            claim_verification_backend = (
+                os.getenv("ENTERPRISE_RESEARCH_CLAIM_VERIFICATION_BACKEND", "disabled").strip().lower()
+            )
+            if claim_verification_backend not in {"disabled", "openai-compatible"}:
+                raise RuntimeError(
+                    "ENTERPRISE_RESEARCH_CLAIM_VERIFICATION_BACKEND must be 'disabled' or 'openai-compatible'."
+                )
+            if claim_verification_backend != "disabled" and claim_backend != "openai-compatible":
+                raise RuntimeError("Claim verification requires enabled 3F Claim generation.")
 
             if planner_backend == "disabled":
                 if claim_backend != "disabled":
@@ -515,6 +533,46 @@ class EnterpriseResearchService:
                         limits=claim_limits,
                     )
 
+                claim_verification_service = None
+                if claim_verification_backend == "openai-compatible":
+                    if claim_generation_service is None or self._engine is None:
+                        raise RuntimeError("Claim verification requires PostgreSQL and enabled Claim generation.")
+                    try:
+                        verification_limits = ClaimVerificationLimits(
+                            max_claims=int(os.getenv("ENTERPRISE_RESEARCH_VERIFY_MAX_CLAIMS", "12")),
+                            max_evidence=int(os.getenv("ENTERPRISE_RESEARCH_VERIFY_MAX_EVIDENCE", "12")),
+                            max_excerpt_chars=int(os.getenv("ENTERPRISE_RESEARCH_VERIFY_MAX_EXCERPT_CHARS", "1800")),
+                            max_quote_chars=int(os.getenv("ENTERPRISE_RESEARCH_VERIFY_MAX_QUOTE_CHARS", "320")),
+                            max_rationale_chars=int(
+                                os.getenv("ENTERPRISE_RESEARCH_VERIFY_MAX_RATIONALE_CHARS", "1000")
+                            ),
+                            min_supported_confidence=float(
+                                os.getenv("ENTERPRISE_RESEARCH_VERIFY_MIN_SUPPORTED_CONFIDENCE", "0.8")
+                            ),
+                        )
+                        verification_timeout = float(os.getenv("ENTERPRISE_RESEARCH_VERIFY_TIMEOUT_SECONDS", "60"))
+                    except ValueError as exc:
+                        raise RuntimeError("Enterprise Research verification limits are invalid.") from exc
+                    if verification_limits.max_claims < claim_limits.max_candidates:
+                        raise RuntimeError("Claim verifier max claims must cover the generation candidate budget.")
+                    if verification_limits.max_evidence < claim_limits.max_evidence:
+                        raise RuntimeError("Claim verifier max evidence must cover the generation evidence budget.")
+                    verification_model = _required_env("ENTERPRISE_RESEARCH_VERIFY_MODEL")
+                    claim_verification_service = ResearchClaimVerificationService(
+                        PostgresResearchClaimVerificationRepository(build_session_factory(self._engine)),
+                        OpenAICompatibleClaimVerifier(
+                            OpenAICompatibleClaimVerifierSettings(
+                                base_url=_required_env("ENTERPRISE_RESEARCH_VERIFY_BASE_URL"),
+                                api_key=_required_env("ENTERPRISE_RESEARCH_VERIFY_API_KEY"),
+                                model=verification_model,
+                                limits=verification_limits,
+                                timeout_seconds=verification_timeout,
+                            )
+                        ),
+                        model=verification_model,
+                        limits=verification_limits,
+                    )
+
                 writer_backend = os.getenv("ENTERPRISE_RESEARCH_WRITER_BACKEND", "disabled").strip().lower()
                 if writer_backend == "disabled":
                     report_writing_service = None
@@ -533,6 +591,7 @@ class EnterpriseResearchService:
                     evidence_progress_callback=run_event_bus.publish_evidence_progress,
                     report_writing_service=report_writing_service,
                     claim_generation_service=claim_generation_service,
+                    claim_verification_service=claim_verification_service,
                 )
 
             else:
