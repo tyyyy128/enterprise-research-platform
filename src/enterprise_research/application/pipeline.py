@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from enterprise_research.application.errors import ResearchStageUnavailableError
 from enterprise_research.application.evidence_extraction_service import (
     ResearchEvidenceExtractionService,
 )
@@ -54,21 +55,31 @@ class ResearchPipelineStageRunner:
                 await self._planning_service.create_plan(task_id, run_id, lease=lease)
             return
 
-        if stage == ResearchRunStatus.SEARCHING and self._search_service is not None:
+        if stage == ResearchRunStatus.SEARCHING:
+            if self._search_service is None:
+                raise ResearchStageUnavailableError("SEARCHING requires a configured search service; no work was done.")
             if lease is None:
                 await self._search_service.search_run(task_id, run_id)
             else:
                 await self._search_service.search_run(task_id, run_id, lease=lease)
             return
 
-        if stage == ResearchRunStatus.EXTRACTING and self._retrieval_service is not None:
+        if stage == ResearchRunStatus.EXTRACTING:
+            if self._retrieval_service is None:
+                raise ResearchStageUnavailableError(
+                    "EXTRACTING requires a configured retrieval service; no work was done."
+                )
             if lease is None:
                 await self._retrieval_service.retrieve_run(task_id, run_id)
             else:
                 await self._retrieval_service.retrieve_run(task_id, run_id, lease=lease)
             return
 
-        if stage == ResearchRunStatus.VERIFYING and self._evidence_extraction_service is not None:
+        if stage == ResearchRunStatus.VERIFYING:
+            if self._evidence_extraction_service is None:
+                raise ResearchStageUnavailableError(
+                    "VERIFYING requires a configured evidence service; no work was done."
+                )
             if self._evidence_progress_callback is None:
                 if lease is None:
                     await self._evidence_extraction_service.extract_run(task_id, run_id)
@@ -87,3 +98,12 @@ class ResearchPipelineStageRunner:
                     progress_callback=self._evidence_progress_callback,
                     lease=lease,
                 )
+
+            return
+
+        if stage == ResearchRunStatus.WRITING:
+            raise ResearchStageUnavailableError(
+                "WRITING has no report writer or durable report completion proof; cannot complete the research run."
+            )
+
+        raise ResearchStageUnavailableError(f"Unsupported research stage: {stage!s}.")

@@ -7,6 +7,7 @@ import logging
 from typing import Protocol
 from uuid import UUID, uuid4
 
+from enterprise_research.application.errors import ResearchStageUnavailableError
 from enterprise_research.application.run_events import ResearchRunEventBus
 from enterprise_research.application.run_lease import (
     ResearchRunLease,
@@ -38,7 +39,7 @@ class ResearchStageRunner(Protocol):
 
 
 class SkeletonResearchStageRunner:
-    """Placeholder stage runner used until real agents are wired in."""
+    """Disabled placeholder: an executable Run must never use a no-op runner."""
 
     async def run_stage(
         self,
@@ -48,8 +49,10 @@ class SkeletonResearchStageRunner:
         *,
         lease: ResearchRunLease | None = None,
     ) -> None:
-        """Yield once without performing external research work."""
-        await asyncio.sleep(0)
+        """Reject execution until a real research stage runner is configured."""
+        raise ResearchStageUnavailableError(
+            f"{stage.value.upper()} cannot execute: research planner/pipeline is disabled (skeleton runner)."
+        )
 
 
 class ResearchRunExecutor:

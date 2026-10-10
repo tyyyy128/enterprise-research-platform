@@ -163,6 +163,7 @@ class ResearchSearchService:
 
         touched_source_ids: list[UUID] = []
         touched_seen: set[UUID] = set()
+        missing_questions: list[UUID] = []
         changed = False
 
         for question in plan.questions:
@@ -178,7 +179,11 @@ class ResearchSearchService:
                     f"Search provider failed for research question {question.question_id}: {question.question}"
                 ) from exc
 
-            for result in list(results)[: self._max_results_per_question]:
+            bounded_results = list(results)[: self._max_results_per_question]
+            if not bounded_results:
+                missing_questions.append(question.question_id)
+
+            for result in bounded_results:
                 canonical_url = canonicalize_url(str(result.url))
 
                 source_id = source_id_by_url.get(canonical_url)
@@ -224,6 +229,13 @@ class ResearchSearchService:
                     touched_seen.add(source_id)
 
                     touched_source_ids.append(source_id)
+
+        # Safe Resume requires run-scoped source provenance for EVERY question.
+        # Do not mark a partially searched plan as completed, and never
+        # persist the staged partial aggregate on a coverage failure.
+        if missing_questions:
+            missing = ", ".join(str(question_id) for question_id in missing_questions)
+            raise ResearchSearchError(f"Search produced no sources for planned question(s): {missing}")
 
         if changed:
             if lease is None:

@@ -8,6 +8,7 @@ from enterprise_research.application import (
     ResearchPlanningService,
     ResearchRunApplicationService,
     ResearchRunExecutor,
+    ResearchStageOutcome,
 )
 from enterprise_research.domain import (
     ResearchPlan,
@@ -125,7 +126,13 @@ def test_executor_runs_planning_and_persists_plan() -> None:
 
         assert planner.calls == 1
 
-        assert completed.status == ResearchRunStatus.COMPLETED
+        assert completed.status == ResearchRunStatus.FAILED
+        assert "SEARCHING requires" in completed.error
+        attempts = await run_application.inspect_stage_attempts(aggregate.task.task_id, research_run.run_id)
+        assert [(item.stage, item.outcome) for item in attempts] == [
+            (ResearchRunStatus.PLANNING, ResearchStageOutcome.COMPLETED),
+            (ResearchRunStatus.SEARCHING, ResearchStageOutcome.FAILED),
+        ]
 
     asyncio.run(run())
 

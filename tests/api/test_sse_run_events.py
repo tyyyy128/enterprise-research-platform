@@ -69,7 +69,7 @@ def test_api_streams_run_lifecycle_and_supports_last_event_id() -> None:
                 # A terminal stream finishes, so ASGITransport can consume it in full.
                 for _ in range(100):
                     status_response = await client.get(f"/api/enterprise-research/tasks/{task_id}/runs/{run_id}")
-                    if status_response.json()["status"] == "completed":
+                    if status_response.json()["status"] == "failed":
                         break
                     await asyncio.sleep(0)
                 else:
@@ -81,7 +81,8 @@ def test_api_streams_run_lifecycle_and_supports_last_event_id() -> None:
                 assert stream.headers["cache-control"] == "no-cache, no-transform"
                 events = parse_sse(stream.text)
                 assert events[0]["event"] == "run.created"
-                assert events[-1]["event"] == "run.completed"
+                assert events[-1]["event"] == "run.failed"
+                assert "skeleton runner" in events[-1]["data"]["error"]
                 assert [event["id"] for event in events] == list(range(1, len(events) + 1))
                 assert events[-1]["data"]["run_id"] == run_id
 

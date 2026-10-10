@@ -257,19 +257,15 @@ def test_existing_source_is_reused_and_metadata_is_preserved() -> None:
         await research_repository.save(aggregate)
 
         first_query = plan.questions[0].question
+        second_query = plan.questions[1].question
 
-        provider = RecordingProvider(
-            {
-                first_query: [
-                    SearchResult(
-                        title="Search title",
-                        url=("https://example.com/shared#fragment"),
-                        snippet="snippet",
-                        provider="fake",
-                    )
-                ]
-            }
+        result = SearchResult(
+            title="Search title",
+            url="https://example.com/shared#fragment",
+            snippet="snippet",
+            provider="fake",
         )
+        provider = RecordingProvider({first_query: [result], second_query: [result]})
 
         service = ResearchSearchService(
             research_repository,
@@ -295,7 +291,7 @@ def test_existing_source_is_reused_and_metadata_is_preserved() -> None:
 
         assert stored_source.metadata["owner"] == "manual"
 
-        assert len(stored_source.metadata["search"]["hits"]) == 1
+        assert len(stored_source.metadata["search"]["hits"]) == 2
 
     asyncio.run(run_test())
 
@@ -312,19 +308,10 @@ def test_repeated_search_does_not_duplicate_sources_or_hits() -> None:
         ) = await setup_searching_run()
 
         first_query = plan.questions[0].question
+        second_query = plan.questions[1].question
 
-        provider = RecordingProvider(
-            {
-                first_query: [
-                    SearchResult(
-                        title="One",
-                        url=("https://example.com/one"),
-                        snippet="one",
-                        provider="fake",
-                    )
-                ]
-            }
-        )
+        result = SearchResult(title="One", url="https://example.com/one", snippet="one", provider="fake")
+        provider = RecordingProvider({first_query: [result], second_query: [result]})
 
         service = ResearchSearchService(
             research_repository,
@@ -351,7 +338,7 @@ def test_repeated_search_does_not_duplicate_sources_or_hits() -> None:
 
         source = next(iter(stored.sources.values()))
 
-        assert len(source.metadata["search"]["hits"]) == 1
+        assert len(source.metadata["search"]["hits"]) == 2
 
     asyncio.run(run_test())
 
@@ -512,6 +499,46 @@ def test_provider_failure_does_not_persist_partial_sources() -> None:
 
         assert stored is not None
 
+        assert stored.sources == {}
+
+    asyncio.run(run_test())
+
+
+def test_empty_search_results_fail_without_marking_any_source_as_persisted() -> None:
+    async def run_test() -> None:
+        research, runs, plans, aggregate, run, plan = await setup_searching_run()
+        provider = RecordingProvider({})
+        service = ResearchSearchService(research, runs, plans, provider)
+        with pytest.raises(ResearchSearchError, match="Search produced no sources"):
+            await service.search_run(aggregate.task.task_id, run.run_id)
+        stored = await research.get(aggregate.task.task_id)
+        assert stored is not None
+        assert stored.sources == {}
+        assert len(provider.calls) == len(plan.questions)
+
+    asyncio.run(run_test())
+
+
+def test_one_missing_question_fails_without_committing_other_question_sources() -> None:
+    async def run_test() -> None:
+        research, runs, plans, aggregate, run, plan = await setup_searching_run()
+        provider = RecordingProvider(
+            {
+                plan.questions[0].question: [
+                    SearchResult(
+                        title="First source",
+                        url="https://example.com/partial",
+                        snippet="Partial",
+                        provider="fake",
+                    )
+                ],
+            }
+        )
+        service = ResearchSearchService(research, runs, plans, provider)
+        with pytest.raises(ResearchSearchError, match=str(plan.questions[1].question_id)):
+            await service.search_run(aggregate.task.task_id, run.run_id)
+        stored = await research.get(aggregate.task.task_id)
+        assert stored is not None
         assert stored.sources == {}
 
     asyncio.run(run_test())

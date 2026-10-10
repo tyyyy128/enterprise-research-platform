@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID, uuid4
 
+import pytest
+
+from enterprise_research.application.errors import ResearchStageUnavailableError
 from enterprise_research.application.pipeline import (
     ResearchPipelineStageRunner,
 )
@@ -58,11 +61,8 @@ def test_pipeline_dispatches_planning_and_searching() -> None:
             ResearchRunStatus.SEARCHING,
         )
 
-        await runner.run_stage(
-            task_id,
-            run_id,
-            ResearchRunStatus.EXTRACTING,
-        )
+        with pytest.raises(ResearchStageUnavailableError, match="EXTRACTING"):
+            await runner.run_stage(task_id, run_id, ResearchRunStatus.EXTRACTING)
 
         assert planning.calls == [(task_id, run_id)]
 
@@ -71,7 +71,7 @@ def test_pipeline_dispatches_planning_and_searching() -> None:
     asyncio.run(run())
 
 
-def test_pipeline_keeps_searching_noop_when_search_is_disabled() -> None:
+def test_pipeline_rejects_searching_when_search_is_disabled() -> None:
     async def run() -> None:
         planning = RecordingPlanningService()
 
@@ -79,11 +79,8 @@ def test_pipeline_keeps_searching_noop_when_search_is_disabled() -> None:
             planning  # type: ignore[arg-type]
         )
 
-        await runner.run_stage(
-            uuid4(),
-            uuid4(),
-            ResearchRunStatus.SEARCHING,
-        )
+        with pytest.raises(ResearchStageUnavailableError, match="SEARCHING"):
+            await runner.run_stage(uuid4(), uuid4(), ResearchRunStatus.SEARCHING)
 
         assert planning.calls == []
 

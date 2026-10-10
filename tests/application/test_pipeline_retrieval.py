@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from enterprise_research.application.errors import ResearchStageUnavailableError
 from enterprise_research.application.pipeline import (
     ResearchPipelineStageRunner,
 )
@@ -85,7 +86,7 @@ def test_pipeline_dispatches_extracting_to_retrieval() -> None:
     asyncio.run(run())
 
 
-def test_pipeline_keeps_extracting_noop_when_retrieval_is_disabled() -> None:
+def test_pipeline_rejects_extracting_when_retrieval_is_disabled() -> None:
     async def run() -> None:
         planning = RecordingPlanningService()
         search = RecordingSearchService()
@@ -95,11 +96,8 @@ def test_pipeline_keeps_extracting_noop_when_retrieval_is_disabled() -> None:
             search,  # type: ignore[arg-type]
         )
 
-        await runner.run_stage(
-            uuid4(),
-            uuid4(),
-            ResearchRunStatus.EXTRACTING,
-        )
+        with pytest.raises(ResearchStageUnavailableError, match="EXTRACTING"):
+            await runner.run_stage(uuid4(), uuid4(), ResearchRunStatus.EXTRACTING)
 
         assert planning.calls == []
         assert search.calls == []

@@ -1,7 +1,8 @@
 """End-to-end SSE checks with the actual router, executor, pipeline and event bus.
 
-The planning and evidence providers are deterministic fakes: this suite tests
-streaming orchestration, not external LLM or search services.  Live-connection
+Stage services are deterministic fakes: this suite tests streaming orchestration,
+not external LLM or search services. WRITING deliberately has no handler and
+therefore fails closed instead of emitting a false run.completed event.  Live-connection
 tests use raw ASGI rather than httpx.ASGITransport, which buffers streaming
 responses until the app finishes sending them.
 """
@@ -38,6 +39,18 @@ PREFIX = "/api/enterprise-research"
 class NoNetworkPlanner:
     async def create_plan(self, task_id: UUID, run_id: UUID, *, lease=None) -> None:
         del task_id, run_id
+        await asyncio.sleep(0)
+
+
+class NoNetworkSearch:
+    async def search_run(self, task_id: UUID, run_id: UUID, *, lease=None) -> None:
+        del task_id, run_id, lease
+        await asyncio.sleep(0)
+
+
+class NoNetworkRetrieval:
+    async def retrieve_run(self, task_id: UUID, run_id: UUID, *, lease=None) -> None:
+        del task_id, run_id, lease
         await asyncio.sleep(0)
 
 
@@ -128,6 +141,8 @@ def build_runtime(*, fail: bool = False, history_limit: int = 64) -> Runtime:
     evidence = ControlledEvidence(fail=fail)
     pipeline = ResearchPipelineStageRunner(
         NoNetworkPlanner(),  # type: ignore[arg-type]
+        NoNetworkSearch(),  # type: ignore[arg-type]
+        NoNetworkRetrieval(),  # type: ignore[arg-type]
         evidence_extraction_service=evidence,  # type: ignore[arg-type]
         evidence_progress_callback=bus.publish_evidence_progress,
     )
@@ -241,7 +256,7 @@ class LiveASGIStream:
         await asyncio.wait_for(self.task, timeout=2)
 
 
-def test_e2e_completed_run_emits_ordered_progress_and_replays_without_duplicates() -> None:
+def test_e2e_unimplemented_writing_fails_after_progress_and_replays_without_duplicates() -> None:
     async def exercise() -> None:
         runtime = build_runtime()
         async with AsyncClient(transport=ASGITransport(app=runtime.app), base_url="http://test") as client:
@@ -263,17 +278,18 @@ def test_e2e_completed_run_emits_ordered_progress_and_replays_without_duplicates
                 "evidence.progress",
                 "evidence.progress",
                 "run.stage",
-                "run.completed",
+                "run.failed",
             ]
             assert [event["id"] for event in events] == list(range(1, len(events) + 1))
             counts = [e["data"]["completed_chunk_count"] for e in events if e["event"] == "evidence.progress"]
             assert counts == [0, 1, 2]
             assert all(event["data"]["task_id"] == task_id for event in events)
             assert all(event["data"]["run_id"] == run_id for event in events)
-            assert events[-1]["data"]["status"] == "completed"
+            assert events[-1]["data"]["status"] == "failed"
+            assert "WRITING has no report writer" in events[-1]["data"]["error"]
             assert runtime.evidence.calls == [(UUID(task_id), UUID(run_id))]
             saved = await runtime.run_application.get_run(UUID(task_id), UUID(run_id))
-            assert saved.status == ResearchRunStatus.COMPLETED
+            assert saved.status == ResearchRunStatus.FAILED
 
             # Reconnect after the VERIFYING stage: no duplicate delivery.
             cursor = events[4]["id"]
@@ -295,7 +311,7 @@ def test_live_http_stream_receives_progress_before_run_finishes() -> None:
                 assert initial[-1]["data"]["completed_chunk_count"] == 0
                 assert runtime.executor.active_count == 1
                 runtime.evidence.release.set()
-                finished = await stream.until_event("run.completed")
+                finished = await stream.until_event("run.failed")
                 counts = [e["data"]["completed_chunk_count"] for e in finished if e["event"] == "evidence.progress"]
                 assert counts == [1, 2]
             await await_idle(runtime.executor)
@@ -319,7 +335,7 @@ def test_disconnecting_live_sse_does_not_cancel_the_background_run() -> None:
             runtime.evidence.release.set()
             await await_idle(runtime.executor)
             final = await client.get(event_path(task_id, run_id))
-            assert parse_frames(final.text)[-1]["event"] == "run.completed"
+            assert parse_frames(final.text)[-1]["event"] == "run.failed"
 
     asyncio.run(exercise())
 
@@ -382,7 +398,7 @@ def test_simultaneous_runs_never_cross_publish_progress_events() -> None:
             for task_id, run_id in ((task_a, run_a), (task_b, run_b)):
                 response = await client.get(event_path(task_id, run_id))
                 events = parse_frames(response.text)
-                assert events[-1]["event"] == "run.completed"
+                assert events[-1]["event"] == "run.failed"
                 assert all(event["data"]["task_id"] == task_id for event in events)
                 assert all(event["data"]["run_id"] == run_id for event in events)
                 assert [e["id"] for e in events] == list(range(1, len(events) + 1))
@@ -427,8 +443,8 @@ def test_two_live_subscribers_are_independent_when_one_disconnects() -> None:
                 await first.disconnect()
                 assert runtime.executor.active_count == 1
                 runtime.evidence.release.set()
-                tail = await second.until_event("run.completed")
-                assert tail[-1]["event"] == "run.completed"
+                tail = await second.until_event("run.failed")
+                assert tail[-1]["event"] == "run.failed"
             await await_idle(runtime.executor)
 
     asyncio.run(exercise())

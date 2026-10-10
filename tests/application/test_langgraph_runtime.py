@@ -17,6 +17,7 @@ from enterprise_research.application import (
     ResearchGraphCheckpointBinding,
     ResearchGraphCheckpointConflictError,
     ResearchLangGraphStageRunner,
+    ResearchStageUnavailableError,
 )
 from enterprise_research.application.run_lease import ResearchRunLease, ResearchRunLeaseLostError
 from enterprise_research.domain import ResearchRunStatus
@@ -265,5 +266,21 @@ def test_plugin_graph_backend_is_opt_in_and_invalid_options_fail_closed(monkeypa
             assert service._deps is None
             assert service._run_executor is None
             await service.stop()
+
+    asyncio.run(exercise())
+
+
+def test_graph_stage_never_turns_unavailable_delegate_into_success_checkpoint():
+    class Unavailable:
+        async def run_stage(self, task_id, run_id, stage, *, lease=None):
+            raise ResearchStageUnavailableError("WRITING has no report writer")
+
+    async def exercise():
+        task_id, run_id, _stage, lease = args()
+        saver = Saver()
+        runner = ResearchLangGraphStageRunner(Unavailable(), saver, graph_factory=graph_factory())
+        with pytest.raises(ResearchStageUnavailableError, match="WRITING"):
+            await runner.run_stage(task_id, run_id, ResearchRunStatus.WRITING, lease=lease)
+        assert not saver.records
 
     asyncio.run(exercise())

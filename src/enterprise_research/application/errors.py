@@ -27,3 +27,10 @@ class ResearchRetrievalError(ResearchApplicationError):
 
 class ResearchEvidenceExtractionError(ResearchApplicationError):
     """Raised when verified evidence extraction cannot proceed safely."""
+
+
+class ResearchStageUnavailableError(ResearchApplicationError):
+    """A research stage cannot be executed because its required handler is unavailable.
+
+    Absence of a handler is a real execution failure, never a successful no-op.
+    """

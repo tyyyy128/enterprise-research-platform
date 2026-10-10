@@ -452,7 +452,11 @@ def test_explicit_resume_uses_real_pipeline_services_and_fenced_saves():
         source = next(iter(latest.sources.values()))
         persisted = await documents.get_for_source(source.source_id)
         assert persisted is not None and persisted.content == "Document fetched after safe resume"
-        assert (await repo.get(run.run_id)).status == ResearchRunStatus.COMPLETED
+        # The pipeline has no verifying/writing handlers. A completed search
+        # and retrieval cannot be mislabeled as a finished research report.
+        failed = await repo.get(run.run_id)
+        assert failed.status == ResearchRunStatus.FAILED
+        assert "VERIFYING requires" in failed.error
         await executor.shutdown()
 
     asyncio.run(run_test())

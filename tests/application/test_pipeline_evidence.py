@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from enterprise_research.application.errors import ResearchStageUnavailableError
 from enterprise_research.application.pipeline import (
     ResearchPipelineStageRunner,
 )
@@ -101,7 +102,7 @@ def test_pipeline_dispatches_verifying_to_evidence_extraction() -> None:
     asyncio.run(run())
 
 
-def test_pipeline_keeps_verifying_noop_when_evidence_is_disabled() -> None:
+def test_pipeline_rejects_verifying_when_evidence_is_disabled() -> None:
     async def run() -> None:
         planning = RecordingPlanningService()
         search = RecordingSearchService()
@@ -113,11 +114,8 @@ def test_pipeline_keeps_verifying_noop_when_evidence_is_disabled() -> None:
             retrieval,  # type: ignore[arg-type]
         )
 
-        await runner.run_stage(
-            uuid4(),
-            uuid4(),
-            ResearchRunStatus.VERIFYING,
-        )
+        with pytest.raises(ResearchStageUnavailableError, match="VERIFYING"):
+            await runner.run_stage(uuid4(), uuid4(), ResearchRunStatus.VERIFYING)
 
         assert planning.calls == []
         assert search.calls == []

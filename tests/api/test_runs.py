@@ -47,7 +47,7 @@ def _isolate_run_api_runtime(
         )
 
 
-def test_create_run_returns_pending_then_completes() -> None:
+def test_create_run_returns_pending_then_fails_if_planner_disabled() -> None:
     async def run() -> None:
         service = EnterpriseResearchService()
 
@@ -102,10 +102,10 @@ def test_create_run_returns_pending_then_completes() -> None:
                     await asyncio.sleep(0)
 
                 assert completed is not None
-                assert completed["status"] == "completed"
+                assert completed["status"] == "failed"
                 assert completed["started_at"] is not None
                 assert completed["completed_at"] is not None
-                assert completed["error"] is None
+                assert "skeleton runner" in completed["error"]
 
         finally:
             await service.stop()

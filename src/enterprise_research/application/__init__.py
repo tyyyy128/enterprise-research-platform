@@ -18,6 +18,7 @@ from enterprise_research.application.errors import (
     ResearchRetrievalError,
     ResearchRunNotFoundError,
     ResearchSearchError,
+    ResearchStageUnavailableError,
     ResearchTaskNotFoundError,
 )
 from enterprise_research.application.evidence_extraction import (
@@ -134,6 +135,7 @@ __all__ = [
     "ResearchTaskNotFoundError",
     "SkeletonResearchStageRunner",
     "ResearchSearchError",
+    "ResearchStageUnavailableError",
     "ResearchSearchService",
     "SearchProvider",
     "SearchResult",
