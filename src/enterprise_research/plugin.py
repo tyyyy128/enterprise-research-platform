@@ -60,6 +60,7 @@ from enterprise_research.application.evidence_workload import (
     EvidenceWorkloadSettings,
 )
 from enterprise_research.application.graph_checkpoint import LangGraphCheckpointReader
+from enterprise_research.application.report_synthesis import ResearchReportSynthesisService
 from enterprise_research.application.report_writing import ResearchReportWritingService
 from enterprise_research.application.run_events import (
     ResearchRunEventBus,
@@ -116,6 +117,10 @@ from enterprise_research.infrastructure.postgres.plan_repository import (
     PostgresResearchPlanRepository,
 )
 from enterprise_research.infrastructure.postgres.report_artifacts import PostgresResearchRunReportRepository
+from enterprise_research.infrastructure.report_synthesis import (
+    OpenAICompatibleReportSynthesisPlanner,
+    OpenAICompatibleReportSynthesisSettings,
+)
 from enterprise_research.infrastructure.retrieval import (
     TavilyExtractSettings,
     TavilyExtractWebContentFetcher,
@@ -248,6 +253,19 @@ class EnterpriseResearchService:
                 )
             if claim_verification_backend != "disabled" and claim_backend != "openai-compatible":
                 raise RuntimeError("Claim verification requires enabled 3F Claim generation.")
+            writer_backend = os.getenv("ENTERPRISE_RESEARCH_WRITER_BACKEND", "disabled").strip().lower()
+            if writer_backend not in {"disabled", "verified-claims", "openai-compatible"}:
+                raise RuntimeError(
+                    "ENTERPRISE_RESEARCH_WRITER_BACKEND must be 'disabled', 'verified-claims' or 'openai-compatible'."
+                )
+            if writer_backend == "openai-compatible" and (
+                repository_backend != "postgres"
+                or planner_backend != "openai-compatible"
+                or claim_verification_backend != "openai-compatible"
+            ):
+                raise RuntimeError(
+                    "Report synthesis requires PostgreSQL, a real planner and enabled 3G Claim verification."
+                )
 
             if planner_backend == "disabled":
                 if claim_backend != "disabled":
@@ -573,15 +591,39 @@ class EnterpriseResearchService:
                         limits=verification_limits,
                     )
 
-                writer_backend = os.getenv("ENTERPRISE_RESEARCH_WRITER_BACKEND", "disabled").strip().lower()
                 if writer_backend == "disabled":
                     report_writing_service = None
                 elif writer_backend == "verified-claims":
                     if report_repository is None or evidence_extraction_service is None:
                         raise RuntimeError("Verified-claims writer requires PostgreSQL and a real evidence extractor.")
                     report_writing_service = ResearchReportWritingService(report_repository)
+                elif writer_backend == "openai-compatible":
+                    if report_repository is None or claim_verification_service is None:
+                        raise RuntimeError("Report synthesis requires PostgreSQL and enabled 3G Claim verification.")
+                    try:
+                        synthesis_timeout = float(os.getenv("ENTERPRISE_RESEARCH_SYNTHESIS_TIMEOUT_SECONDS", "60"))
+                        synthesis_temperature = float(os.getenv("ENTERPRISE_RESEARCH_SYNTHESIS_TEMPERATURE", "0"))
+                    except ValueError as exc:
+                        raise RuntimeError("Enterprise Research report synthesis settings are invalid.") from exc
+                    synthesis_model = _required_env("ENTERPRISE_RESEARCH_SYNTHESIS_MODEL")
+                    report_writing_service = ResearchReportSynthesisService(
+                        report_repository,
+                        OpenAICompatibleReportSynthesisPlanner(
+                            OpenAICompatibleReportSynthesisSettings(
+                                base_url=_required_env("ENTERPRISE_RESEARCH_SYNTHESIS_BASE_URL"),
+                                api_key=_required_env("ENTERPRISE_RESEARCH_SYNTHESIS_API_KEY"),
+                                model=synthesis_model,
+                                timeout_seconds=synthesis_timeout,
+                                temperature=synthesis_temperature,
+                            )
+                        ),
+                        model=synthesis_model,
+                    )
                 else:
-                    raise RuntimeError("ENTERPRISE_RESEARCH_WRITER_BACKEND must be 'disabled' or 'verified-claims'.")
+                    raise RuntimeError(
+                        "ENTERPRISE_RESEARCH_WRITER_BACKEND must be 'disabled', "
+                        "'verified-claims' or 'openai-compatible'."
+                    )
 
                 stage_runner = ResearchPipelineStageRunner(
                     planning_service,

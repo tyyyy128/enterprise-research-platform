@@ -284,6 +284,8 @@ class ResearchRunReportResponse(BaseModel):
     body_sha256: str
     payload_sha256: str
     created_at: datetime
+    synthesis_model: str | None = None
+    synthesis_sha256: str | None = None
 
     @classmethod
     def from_artifact(cls, artifact: ResearchRunReportArtifact) -> ResearchRunReportResponse:
@@ -297,4 +299,6 @@ class ResearchRunReportResponse(BaseModel):
             body_sha256=artifact.body_sha256,
             payload_sha256=artifact.payload_sha256,
             created_at=artifact.created_at,
+            synthesis_model=artifact.synthesis_model,
+            synthesis_sha256=artifact.synthesis_sha256,
         )

@@ -14,6 +14,7 @@ def test_expected_postgres_tables_are_registered() -> None:
         "research_run_stage_attempts",
         "research_run_evidence_manifests",
         "research_run_report_artifacts",
+        "research_run_report_syntheses",
         "research_run_claim_generations",
         "research_run_claim_verifications",
         "research_plan_questions",
@@ -142,4 +143,19 @@ def test_run_claim_verification_receipt_is_fenced_and_run_scoped() -> None:
         "ck_run_claim_verification_output",
         "ck_run_claim_verification_verdicts",
         "ck_run_claim_verification_limits",
+    }
+
+
+def test_report_synthesis_receipt_is_fenced_and_owned_by_run_report():
+    table = Base.metadata.tables["research_run_report_syntheses"]
+    assert {col.name for col in table.primary_key.columns} == {"run_id"}
+    assert {fk.target_fullname for fk in table.foreign_keys} == {
+        "research_run_report_artifacts.run_id",
+        "research_tasks.id",
+    }
+    assert {constraint.name for constraint in table.constraints if constraint.name} >= {
+        "ck_report_synthesis_fencing",
+        "ck_report_synthesis_input",
+        "ck_report_synthesis_receipt",
+        "ck_report_synthesis_plan",
     }

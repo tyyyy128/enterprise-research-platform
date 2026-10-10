@@ -14,6 +14,7 @@ from enterprise_research.application.evidence_progress import EvidenceProgressCa
 from enterprise_research.application.planning_service import (
     ResearchPlanningService,
 )
+from enterprise_research.application.report_synthesis import ResearchReportSynthesisService
 from enterprise_research.application.report_writing import ResearchReportWritingService
 from enterprise_research.application.retrieval_service import (
     ResearchRetrievalService,
@@ -35,7 +36,7 @@ class ResearchPipelineStageRunner:
         retrieval_service: ResearchRetrievalService | None = None,
         evidence_extraction_service: (ResearchEvidenceExtractionService | None) = None,
         evidence_progress_callback: EvidenceProgressCallback | None = None,
-        report_writing_service: ResearchReportWritingService | None = None,
+        report_writing_service: ResearchReportWritingService | ResearchReportSynthesisService | None = None,
         claim_generation_service: ResearchClaimGenerationService | None = None,
         claim_verification_service: ResearchClaimVerificationService | None = None,
     ) -> None:

@@ -597,6 +597,34 @@ class ResearchRunReportRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ResearchRunReportSynthesisRow(Base):
+    """3H write-once model outline; verified against live Run facts at terminal commit."""
+
+    __tablename__ = "research_run_report_syntheses"
+    __table_args__ = (
+        CheckConstraint("fencing_token > 0", name="ck_report_synthesis_fencing"),
+        CheckConstraint("length(input_sha256) = 64", name="ck_report_synthesis_input"),
+        CheckConstraint("length(receipt_sha256) = 64", name="ck_report_synthesis_receipt"),
+        CheckConstraint("length(btrim(model)) > 0", name="ck_report_synthesis_model"),
+        CheckConstraint("jsonb_typeof(plan) = 'object'", name="ck_report_synthesis_plan"),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("research_run_report_artifacts.run_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    task_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    receipt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ResearchPlanRow(Base):
     """Persisted structured research plan."""
 

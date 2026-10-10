@@ -15,10 +15,22 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from enterprise_research.application.errors import ResearchReportWritingError
+from enterprise_research.application.report_synthesis import (
+    ReportSynthesisCaveat,
+    ReportSynthesisContext,
+    ReportSynthesisPlan,
+    ReportSynthesisQuote,
+    plan_data,
+    plan_from_data,
+    synthesis_input_sha256,
+    synthesis_receipt_sha256,
+    validate_synthesis_plan,
+)
 from enterprise_research.application.report_writing import (
     ReportClaimReference,
     ReportEvidenceReference,
     ResearchRunReportArtifact,
+    render_synthesized_report,
     render_verified_report,
     report_digest,
 )
@@ -37,13 +49,16 @@ from enterprise_research.infrastructure.postgres.models import (
     ResearchRunClaimGenerationRow,
     ResearchRunClaimVerificationRow,
     ResearchRunReportRow,
+    ResearchRunReportSynthesisRow,
     ResearchSourceRow,
     ResearchStageAttemptRow,
 )
 from enterprise_research.infrastructure.postgres.stage_completion import validate_persisted_stage_artifacts
 
 
-def _artifact(row: ResearchRunReportRow) -> ResearchRunReportArtifact:
+def _artifact(
+    row: ResearchRunReportRow, synthesis: ResearchRunReportSynthesisRow | None = None
+) -> ResearchRunReportArtifact:
     return ResearchRunReportArtifact(
         task_id=row.task_id,
         run_id=row.run_id,
@@ -54,11 +69,13 @@ def _artifact(row: ResearchRunReportRow) -> ResearchRunReportArtifact:
         body_sha256=row.body_sha256,
         payload_sha256=row.payload_sha256,
         created_at=row.created_at,
+        synthesis_model=synthesis.model if synthesis is not None else None,
+        synthesis_sha256=synthesis.receipt_sha256 if synthesis is not None else None,
     )
 
 
-async def _make_run_draft(session: AsyncSession, *, task_id: UUID, run_id: UUID, fencing_token: int):
-    """Rebuild the whole report from independently persisted, locked facts."""
+async def _make_run_material(session: AsyncSession, *, task_id: UUID, run_id: UUID, fencing_token: int):
+    """Rebuild the whole material from independently persisted, locked facts."""
     verified = await session.get(
         ResearchStageAttemptRow, (run_id, ResearchRunStatus.VERIFYING.value, fencing_token), with_for_update=True
     )
@@ -91,6 +108,8 @@ async def _make_run_draft(session: AsyncSession, *, task_id: UUID, run_id: UUID,
     # verified SUPPORTED candidates may enter the final report. Task-level
     # manual/older SUPPORTED Claims cannot impersonate this Run's decisions.
     generation = await session.get(ResearchRunClaimGenerationRow, run_id, with_for_update=True)
+    caveats: list[ReportSynthesisCaveat] = []
+    adverse: list[dict] = []
     if generation is not None:
         await validate_run_claim_verification_receipt(
             session, task_id=task_id, run_id=run_id, fencing_token=fencing_token, required=True
@@ -103,6 +122,7 @@ async def _make_run_draft(session: AsyncSession, *, task_id: UUID, run_id: UUID,
         claims = [claim for claim in claims if str(claim.id) in verified_ids]
         if not claims:
             raise ResearchReportWritingError("WRITING found no SUPPORTED candidates verified for this Run.")
+        adverse = [item for item in verification.verdicts if item["status"] != ClaimStatus.SUPPORTED.value]
 
     links = (
         await session.scalars(
@@ -133,6 +153,52 @@ async def _make_run_draft(session: AsyncSession, *, task_id: UUID, run_id: UUID,
         )
     ).all()
     source_by_id = {row.id: row for row in sources}
+
+    if adverse:
+        raw_claims = (
+            await session.scalars(
+                select(ResearchClaimRow)
+                .where(
+                    ResearchClaimRow.task_id == task_id,
+                    ResearchClaimRow.id.in_([UUID(item["claim_id"]) for item in adverse]),
+                )
+                .with_for_update(read=True)
+            )
+        ).all()
+        texts = {str(item.id): item.text for item in raw_claims}
+        if len(texts) != len(adverse):
+            raise ResearchReportWritingError("WRITING cannot locate all adverse Claim decisions.")
+
+        def quote_refs(quotes: list) -> tuple[ReportSynthesisQuote, ...]:
+            result = []
+            for evidence_id, quoted_text in quotes:
+                evidence = evidence_by_id.get(UUID(evidence_id))
+                if evidence is None or quoted_text not in evidence.content:
+                    raise ResearchReportWritingError("WRITING adverse verification quote changed or disappeared.")
+                source = source_by_id.get(evidence.source_id)
+                if source is None or not source.url:
+                    raise ResearchReportWritingError("WRITING adverse quote has no source.")
+                result.append(
+                    ReportSynthesisQuote(
+                        evidence.id,
+                        quoted_text,
+                        source.url,
+                        evidence_fingerprint(evidence.source_id, evidence.locator, evidence.content),
+                    )
+                )
+            return tuple(result)
+
+        caveats = [
+            ReportSynthesisCaveat(
+                UUID(item["claim_id"]),
+                texts[item["claim_id"]],
+                item["status"],
+                item["rationale"],
+                quote_refs(item["supporting"]),
+                quote_refs(item["contradicting"]),
+            )
+            for item in adverse
+        ]
 
     selected: list[ReportClaimReference] = []
     for claim in claims:
@@ -166,7 +232,26 @@ async def _make_run_draft(session: AsyncSession, *, task_id: UUID, run_id: UUID,
         selected.append(ReportClaimReference(claim_id=claim.id, text=claim.text, evidence=tuple(refs)))
     if not selected:
         raise ResearchReportWritingError("WRITING found no supported Claim grounded exclusively in this Run.")
-    return render_verified_report(plan.objective, tuple(selected))
+    return plan.objective, tuple(selected), tuple(caveats)
+
+
+async def _make_run_draft(session: AsyncSession, *, task_id: UUID, run_id: UUID, fencing_token: int):
+    """Preserve 7C deterministic report semantics for legacy configured writers."""
+    title, claims, _ = await _make_run_material(session, task_id=task_id, run_id=run_id, fencing_token=fencing_token)
+    return render_verified_report(title, claims)
+
+
+def _context(task_id: UUID, run_id: UUID, fencing_token: int, material: tuple) -> ReportSynthesisContext:
+    title, claims, caveats = material
+    return ReportSynthesisContext(
+        task_id,
+        run_id,
+        fencing_token,
+        title,
+        claims,
+        caveats,
+        synthesis_input_sha256(title, claims, caveats),
+    )
 
 
 async def validate_run_terminal_report(
@@ -193,7 +278,25 @@ async def validate_run_terminal_report(
     row = await session.get(ResearchRunReportRow, run_id, with_for_update=True)
     if row is None or row.task_id != task_id or row.fencing_token != fencing_token:
         raise ResearchReportWritingError("WRITING proof missing: run/generation-scoped report artifact.")
-    draft = await _make_run_draft(session, task_id=task_id, run_id=run_id, fencing_token=fencing_token)
+    synthesis = await session.get(ResearchRunReportSynthesisRow, run_id, with_for_update=True)
+    if synthesis is None:
+        draft = await _make_run_draft(session, task_id=task_id, run_id=run_id, fencing_token=fencing_token)
+    else:
+        await _require_3g_synthesis_receipts(session, run_id)
+        if synthesis.task_id != task_id or synthesis.fencing_token != fencing_token:
+            raise ResearchReportWritingError("WRITING synthesis receipt has foreign Run/Fencing ownership.")
+        context = _context(
+            task_id,
+            run_id,
+            fencing_token,
+            await _make_run_material(session, task_id=task_id, run_id=run_id, fencing_token=fencing_token),
+        )
+        if context.input_sha256 != synthesis.input_sha256:
+            raise ResearchReportWritingError("WRITING synthesis input changed after the model snapshot.")
+        plan = validate_synthesis_plan(context, plan_from_data(synthesis.plan))
+        if synthesis_receipt_sha256(synthesis.model, context.input_sha256, plan) != synthesis.receipt_sha256:
+            raise ResearchReportWritingError("WRITING synthesis receipt checksum changed.")
+        draft = render_synthesized_report(context, plan)
     if (
         row.title != draft.title
         or row.body != draft.body
@@ -205,11 +308,108 @@ async def validate_run_terminal_report(
         raise ResearchReportWritingError("WRITING report content/citations changed after the durable receipt.")
 
 
+async def _require_3g_synthesis_receipts(session: AsyncSession, run_id: UUID) -> None:
+    """3H has a stricter admission gate than the legacy manual 7C report mode."""
+    generation = await session.get(ResearchRunClaimGenerationRow, run_id, with_for_update=True)
+    verification = await session.get(ResearchRunClaimVerificationRow, run_id, with_for_update=True)
+    if generation is None or verification is None:
+        raise ResearchReportWritingError("WRITING synthesis requires 3F/3G Run-level verification receipts.")
+
+
 class PostgresResearchRunReportRepository:
     """Create once under live WRITING lease; never borrow task-level reports."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+
+    async def load_synthesis_context(
+        self, task_id: UUID, run_id: UUID, lease: ResearchRunLease
+    ) -> ReportSynthesisContext:
+        if lease.run_id != run_id:
+            raise ResearchReportWritingError("WRITING synthesis lease does not match this Run.")
+        async with self._session_factory() as session:
+            async with session.begin():
+                await lock_fenced_stage(session, lease, task_id=task_id, stage=ResearchRunStatus.WRITING)
+                journal = await session.get(
+                    ResearchStageAttemptRow,
+                    (run_id, ResearchRunStatus.WRITING.value, lease.fencing_token),
+                    with_for_update=True,
+                )
+                if journal is None or journal.outcome != ResearchStageOutcome.STARTED.value:
+                    raise ResearchReportWritingError("WRITING synthesis requires a started Stage Journal.")
+                if await session.get(ResearchRunReportRow, run_id) is not None:
+                    raise ResearchReportWritingError("WRITING report is already committed for this Run.")
+                await _require_3g_synthesis_receipts(session, run_id)
+                material = await _make_run_material(
+                    session, task_id=task_id, run_id=run_id, fencing_token=lease.fencing_token
+                )
+                # Fail before network I/O if the verified input exceeds the old
+                # evidence/citation budgets; never feed a truncated set to the model.
+                render_verified_report(material[0], material[1])
+                return _context(task_id, run_id, lease.fencing_token, material)
+
+    async def write_synthesized_guarded(
+        self,
+        context: ReportSynthesisContext,
+        plan: ReportSynthesisPlan,
+        lease: ResearchRunLease,
+        *,
+        model: str,
+    ) -> None:
+        """No model I/O here: revalidate snapshot under lock and atomically write two receipts."""
+        if lease.run_id != context.run_id or lease.fencing_token != context.fencing_token:
+            raise ResearchReportWritingError("WRITING synthesis lease changed during model execution.")
+        validate_synthesis_plan(context, plan)
+        async with self._session_factory() as session:
+            async with session.begin():
+                await lock_fenced_stage(session, lease, task_id=context.task_id, stage=ResearchRunStatus.WRITING)
+                journal = await session.get(
+                    ResearchStageAttemptRow,
+                    (context.run_id, ResearchRunStatus.WRITING.value, lease.fencing_token),
+                    with_for_update=True,
+                )
+                if journal is None or journal.outcome != ResearchStageOutcome.STARTED.value:
+                    raise ResearchReportWritingError("WRITING synthesis Stage Journal is not started.")
+                if await session.get(ResearchRunReportRow, context.run_id) is not None:
+                    raise ResearchReportWritingError("WRITING report is immutable and already exists for this Run.")
+                await _require_3g_synthesis_receipts(session, context.run_id)
+                current = _context(
+                    context.task_id,
+                    context.run_id,
+                    lease.fencing_token,
+                    await _make_run_material(
+                        session, task_id=context.task_id, run_id=context.run_id, fencing_token=lease.fencing_token
+                    ),
+                )
+                if current.input_sha256 != context.input_sha256 or current != context:
+                    raise ResearchReportWritingError("WRITING synthesis inputs changed during model execution.")
+                draft = render_synthesized_report(current, plan)
+                session.add(
+                    ResearchRunReportRow(
+                        run_id=context.run_id,
+                        task_id=context.task_id,
+                        fencing_token=lease.fencing_token,
+                        title=draft.title,
+                        body=draft.body,
+                        citations=list(draft.citations),
+                        body_sha256=draft.body_sha256,
+                        payload_sha256=draft.payload_sha256,
+                        created_at=func.clock_timestamp(),
+                    )
+                )
+                session.add(
+                    ResearchRunReportSynthesisRow(
+                        run_id=context.run_id,
+                        task_id=context.task_id,
+                        fencing_token=lease.fencing_token,
+                        model=model,
+                        input_sha256=current.input_sha256,
+                        plan=plan_data(plan),
+                        receipt_sha256=synthesis_receipt_sha256(model, current.input_sha256, plan),
+                        created_at=func.clock_timestamp(),
+                    )
+                )
+                await session.flush()
 
     async def write_guarded(self, task_id: UUID, run_id: UUID, lease: ResearchRunLease) -> ResearchRunReportArtifact:
         if lease.run_id != run_id:
@@ -255,4 +455,12 @@ class PostgresResearchRunReportRepository:
                 or hashlib.sha256(row.body.encode("utf-8")).hexdigest() != row.body_sha256
             ):
                 raise ResearchReportWritingError("Stored report artifact checksum does not match content.")
-            return _artifact(row)
+            synthesis = await session.get(ResearchRunReportSynthesisRow, run_id)
+            if synthesis is not None and (
+                synthesis.task_id != task_id
+                or synthesis.fencing_token != row.fencing_token
+                or synthesis_receipt_sha256(synthesis.model, synthesis.input_sha256, plan_from_data(synthesis.plan))
+                != synthesis.receipt_sha256
+            ):
+                raise ResearchReportWritingError("Stored report synthesis receipt is inconsistent.")
+            return _artifact(row, synthesis)

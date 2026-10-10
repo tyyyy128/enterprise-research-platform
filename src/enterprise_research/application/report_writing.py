@@ -1,7 +1,7 @@
-"""7C: deterministic, run-scoped reports from previously supported claims.
+"""Run-scoped report rendering with 7C facts and 3H bounded model grouping.
 
-This is *not* automatic claim generation or LLM synthesis. The writer may only
-include claims whose complete evidence set is in this Run's verified manifest.
+The baseline report is deterministic; the 3H variant is deterministically
+rendered from a model-selected outline, never from unverified factual prose.
 """
 
 from __future__ import annotations
@@ -11,11 +11,18 @@ import html
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+from urllib.parse import quote, urlsplit
 from uuid import UUID
 
 from enterprise_research.application.errors import ResearchStageCompletionError
 from enterprise_research.application.run_lease import ResearchRunLease
+
+if TYPE_CHECKING:
+    from enterprise_research.application.report_synthesis import (
+        ReportSynthesisContext,
+        ReportSynthesisPlan,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +64,8 @@ class ResearchRunReportArtifact:
     body_sha256: str
     payload_sha256: str
     created_at: datetime
+    synthesis_model: str | None = None
+    synthesis_sha256: str | None = None
 
 
 class ResearchRunReportRepository(Protocol):
@@ -85,6 +94,19 @@ def _plain(text: str) -> str:
     for marker in ("\\", "`", "*", "_", "[", "]", "(", ")", "#", "!", "|"):
         escaped = escaped.replace(marker, "\\" + marker)
     return escaped
+
+
+def _reference_url(url: str) -> str:
+    """Encode Markdown URL delimiters; never treat source URLs as literal markup."""
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or len(url) > 2048
+        or any(char.isspace() or ord(char) < 32 for char in url)
+    ):
+        raise ResearchStageCompletionError("WRITING requires bounded HTTP(S) source URLs.")
+    return quote(url, safe=":/?&=%#@+;,$-_.!~*'")
 
 
 def _canonical(data: object) -> str:
@@ -139,7 +161,7 @@ def render_verified_report(title: str, claims: tuple[ReportClaimReference, ...])
             lines.append(
                 f"   - Evidence {_plain(str(evidence.evidence_id))}: "
                 f"{_plain(evidence.excerpt[:500])} — "
-                f"[Source {_plain(str(evidence.source_id))}]({evidence.source_url}){location}"
+                f"[Source {_plain(str(evidence.source_id))}]({_reference_url(evidence.source_url)}){location}"
             )
         citations.append({"claim_id": str(claim.claim_id), "evidence": refs})
         lines.append("")
@@ -153,4 +175,82 @@ def render_verified_report(title: str, claims: tuple[ReportClaimReference, ...])
         citations=output,
         body_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
         payload_sha256=report_digest(title, body, output),
+    )
+
+
+def render_synthesized_report(context: ReportSynthesisContext, plan: ReportSynthesisPlan) -> ReportDraft:
+    """Render model-selected grouping, never generated factual prose or URLs."""
+    from enterprise_research.application.report_synthesis import validate_synthesis_plan
+
+    validate_synthesis_plan(context, plan)
+    claims = {claim.claim_id: claim for claim in context.claims}
+    citation_catalog = render_verified_report(context.title, context.claims)
+    by_id = {item["claim_id"]: item for item in citation_catalog.citations}
+    lines = [
+        f"# {_plain(context.title)}",
+        "",
+        "> Model-guided outline over independently verified claims; grouping is not a new factual finding.",
+        "",
+    ]
+    if plan.highlights:
+        lines.extend(["## Executive overview", ""])
+        for claim_id in plan.highlights:
+            lines.append(f"- {_plain(claims[claim_id].text)} (Claim `{claim_id}`)")
+        lines.append("")
+    citations = []
+    for section in plan.sections:
+        lines.extend([f"## {section.heading}", ""])
+        if len(section.claim_ids) > 1:
+            lines.extend(
+                [
+                    "The statements below are grouped for comparison; no causal relationship is implied.",
+                    "",
+                ]
+            )
+        for position, claim_id in enumerate(section.claim_ids, 1):
+            claim = claims[claim_id]
+            lines.append(f"{position}. {_plain(claim.text)} (Claim `{claim_id}`)")
+            citation = by_id[str(claim_id)]
+            citations.append(citation)
+            for evidence, reference in zip(claim.evidence, citation["evidence"], strict=True):
+                location = f" · {_plain(evidence.locator)}" if evidence.locator else ""
+                # Use the exact already-validated source information; never a model-provided URL.
+                lines.append(
+                    f"   - Evidence {_plain(str(evidence.evidence_id))}: "
+                    f"{_plain(evidence.excerpt[:500])} — "
+                    f"[Source {_plain(str(evidence.source_id))}]({_reference_url(reference['url'])}){location}"
+                )
+            lines.append("")
+    if context.caveats:
+        lines.extend(
+            [
+                "## Conflicts and evidence limitations",
+                "",
+                "The following candidate claims did not qualify as supported findings:",
+                "",
+            ]
+        )
+        for caveat in context.caveats:
+            label = "Conflicting evidence" if caveat.status == "conflicted" else "Insufficient support"
+            lines.append(
+                f"- **{label}** (Claim `{caveat.claim_id}`): {_plain(caveat.text)} "
+                f"— Reviewer rationale: {_plain(caveat.rationale)}"
+            )
+            for kind, quotes in (("Supporting excerpt", caveat.supporting), ("Contrary excerpt", caveat.contradicting)):
+                for item in quotes:
+                    lines.append(
+                        f"  - {kind}: {_plain(item.quote)} "
+                        f"— [Source]({_reference_url(item.source_url)}) (Evidence `{item.evidence_id}`)"
+                    )
+        lines.append("")
+    body = "\n".join(lines).rstrip() + "\n"
+    if len(body) > 200_000:
+        raise ResearchStageCompletionError("WRITING synthesized report body exceeds the declared size budget.")
+    refs = tuple(citations)
+    return ReportDraft(
+        title=context.title,
+        body=body,
+        citations=refs,
+        body_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        payload_sha256=report_digest(context.title, body, refs),
     )
