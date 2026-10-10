@@ -21,6 +21,7 @@ from enterprise_research.application.errors import (
 from enterprise_research.application.evidence_extraction import (
     EvidenceExtractor,
 )
+from enterprise_research.application.evidence_manifest_repository import ResearchEvidenceManifestRepository
 from enterprise_research.application.evidence_progress import (
     EvidenceExtractionProgress,
     EvidenceProgressCallback,
@@ -44,6 +45,7 @@ from enterprise_research.application.run_lease import ResearchRunLease
 from enterprise_research.application.run_repository import (
     ResearchRunRepository,
 )
+from enterprise_research.application.stage_completion import EvidenceCompletionManifest, evidence_fingerprint
 from enterprise_research.domain import (
     Evidence,
     ResearchRunStatus,
@@ -85,6 +87,7 @@ class ResearchEvidenceExtractionService:
         chunking_settings: DocumentChunkingSettings | None = None,
         workload_settings: EvidenceWorkloadSettings | None = None,
         max_concurrency: int = 4,
+        manifest_repository: ResearchEvidenceManifestRepository | None = None,
     ) -> None:
         self._research_repository = research_repository
         self._run_repository = run_repository
@@ -97,6 +100,7 @@ class ResearchEvidenceExtractionService:
             raise ValueError("max_concurrency must be at least 1.")
 
         self._max_concurrency = max_concurrency
+        self._manifest_repository = manifest_repository
 
     async def extract_run(
         self,
@@ -130,6 +134,7 @@ class ResearchEvidenceExtractionService:
 
         # Phase 1: load and chunk documents without invoking an LLM.
         document_chunks: list[EvidenceDocumentChunks] = []
+        eligible_document_hashes: dict[UUID, str] = {}
         for source in aggregate.sources.values():
             document = await self._document_repository.get_for_source(source.source_id)
             if document is None:
@@ -143,10 +148,14 @@ class ResearchEvidenceExtractionService:
 
             chunks = chunk_document(document.content, self._chunking_settings)
             document_chunks.append(EvidenceDocumentChunks(source_id=source.source_id, chunks=tuple(chunks)))
+            if chunks and document.content_hash is not None:
+                eligible_document_hashes[source.source_id] = document.content_hash
 
         # Phase 2: enforce workload limits before making model calls.
         workload = plan_evidence_workload(document_chunks, self._workload_settings)
-        if workload.eligible_document_count == 0:
+        if workload.eligible_document_count == 0 or (
+            self._manifest_repository is not None and workload.scheduled_chunk_count == 0
+        ):
             raise ResearchEvidenceExtractionError(
                 "Research run has no successfully retrieved documents eligible for evidence extraction."
             )
@@ -158,6 +167,7 @@ class ResearchEvidenceExtractionService:
         deduplicated_count = 0
         created_count = 0
         reused_count = 0
+        verified_keys: set[tuple[UUID, str, str]] = set()
 
         def snapshot() -> EvidenceExtractionProgress:
             return EvidenceExtractionProgress(
@@ -221,6 +231,7 @@ class ResearchEvidenceExtractionService:
                     verified_count += 1
                     locator = f"chars:{verified.start_offset}-{verified.end_offset}"
                     key = (source.source_id, locator, verified.content)
+                    verified_keys.add(key)
 
                     if key in existing_keys:
                         reused_count += 1
@@ -283,6 +294,50 @@ class ResearchEvidenceExtractionService:
                     ResearchRunStatus.VERIFYING,
                     run_repository=self._run_repository,
                 )
+
+        # Emit the fenced, durable receipt after ALL scheduled calls and
+        # the evidence aggregate write have completed. No receipt is emitted
+        # if a chunk fails or the progress callback raises.
+        if self._manifest_repository is not None:
+            if lease is None:
+                raise ResearchEvidenceExtractionError("Evidence completion receipt requires a fenced lease.")
+            referenced_ids = tuple(
+                sorted(
+                    (
+                        item.evidence_id
+                        for item in aggregate.evidence.values()
+                        if (item.source_id, item.locator, item.content) in verified_keys
+                    ),
+                    key=str,
+                )
+            )
+            manifest = EvidenceCompletionManifest(
+                task_id=task_id,
+                run_id=run_id,
+                fencing_token=lease.fencing_token,
+                eligible_document_count=workload.eligible_document_count,
+                scheduled_chunk_count=workload.scheduled_chunk_count,
+                completed_chunk_count=completed_chunk_count,
+                verified_count=verified_count,
+                created_count=created_count,
+                reused_count=reused_count,
+                document_hashes=tuple(sorted(eligible_document_hashes.items(), key=lambda item: str(item[0]))),
+                evidence_ids=referenced_ids,
+                evidence_hashes=tuple(
+                    sorted(
+                        (
+                            (
+                                evidence.evidence_id,
+                                evidence_fingerprint(evidence.source_id, evidence.locator, evidence.content),
+                            )
+                            for evidence in aggregate.evidence.values()
+                            if evidence.evidence_id in referenced_ids
+                        ),
+                        key=lambda item: str(item[0]),
+                    )
+                ),
+            )
+            await self._manifest_repository.save_guarded(manifest, lease)
 
         return EvidenceExtractionSummary(
             eligible_document_count=workload.eligible_document_count,

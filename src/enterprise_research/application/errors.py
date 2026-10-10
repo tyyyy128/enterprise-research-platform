@@ -34,3 +34,7 @@ class ResearchStageUnavailableError(ResearchApplicationError):
 
     Absence of a handler is a real execution failure, never a successful no-op.
     """
+
+
+class ResearchStageCompletionError(ResearchApplicationError):
+    """Stage work returned but durable artifacts do not prove completion."""

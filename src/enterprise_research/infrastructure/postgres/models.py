@@ -463,6 +463,44 @@ class ResearchStageAttemptRow(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ResearchEvidenceManifestRow(Base):
+    """Fenced receipt for completed evidence-extraction work, including zero hits."""
+
+    __tablename__ = "research_run_evidence_manifests"
+    __table_args__ = (
+        CheckConstraint("fencing_token > 0", name="ck_evidence_manifest_fencing"),
+        CheckConstraint("eligible_document_count > 0", name="ck_evidence_manifest_documents"),
+        CheckConstraint("scheduled_chunk_count > 0", name="ck_evidence_manifest_scheduled"),
+        CheckConstraint("completed_chunk_count = scheduled_chunk_count", name="ck_evidence_manifest_completed"),
+        CheckConstraint(
+            "verified_count >= 0 AND created_count >= 0 AND reused_count >= 0 "
+            "AND created_count + reused_count <= verified_count",
+            name="ck_evidence_manifest_counters",
+        ),
+        CheckConstraint("jsonb_typeof(document_hashes) = 'object'", name="ck_evidence_manifest_hash_shape"),
+        CheckConstraint("jsonb_typeof(evidence_ids) = 'array'", name="ck_evidence_manifest_id_shape"),
+        CheckConstraint("jsonb_typeof(evidence_hashes) = 'object'", name="ck_evidence_manifest_evidence_shape"),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    task_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    eligible_document_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    scheduled_chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed_chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    verified_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reused_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    document_hashes: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    evidence_hashes: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ResearchPlanRow(Base):
     """Persisted structured research plan."""
 

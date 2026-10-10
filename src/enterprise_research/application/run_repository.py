@@ -48,8 +48,9 @@ class ResearchRunRepository(Protocol):
         *,
         outcome: ResearchStageOutcome,
         error: str | None = None,
+        require_artifact_proof: bool = False,
     ) -> ResearchStageAttempt:
-        """Atomically finish this generation's started attempt under its live lease."""
+        """Finish under the live lease; optionally require atomic artifact proof."""
 
     async def list_stage_attempts(self, run_id: UUID) -> list[ResearchStageAttempt]:
         """Return persisted stage attempts for recovery inspection, never replay."""

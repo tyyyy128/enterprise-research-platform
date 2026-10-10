@@ -21,6 +21,7 @@ from enterprise_research.application.stage_journal import (
 )
 from enterprise_research.domain import ResearchRun, ResearchRunStatus
 from enterprise_research.infrastructure.postgres.models import ResearchRunRow, ResearchStageAttemptRow
+from enterprise_research.infrastructure.postgres.stage_completion import validate_persisted_stage_artifacts
 
 _TERMINAL = (ResearchRunStatus.COMPLETED.value, ResearchRunStatus.FAILED.value)
 
@@ -281,10 +282,13 @@ class PostgresResearchRunRepository:
         *,
         outcome: ResearchStageOutcome,
         error: str | None = None,
+        require_artifact_proof: bool = False,
     ) -> ResearchStageAttempt:
-        """Set a terminal attempt result under the same live run row lock."""
+        """Verify durable artifacts and commit COMPLETED in one fenced transaction."""
         validate_stage(stage)
         error = validate_stage_finish(outcome, error)
+        if require_artifact_proof and outcome != ResearchStageOutcome.COMPLETED:
+            raise ValueError("Artifact completion proof is only available for COMPLETED outcomes.")
         async with self._session_factory() as session:
             async with session.begin():
                 await self._require_stage_lease(session, lease, stage)
@@ -292,6 +296,16 @@ class PostgresResearchRunRepository:
                 row = await session.get(ResearchStageAttemptRow, key, with_for_update=True)
                 if row is None or row.outcome != ResearchStageOutcome.STARTED.value:
                     raise ResearchStageJournalConflictError("Stage attempt is missing or already finished.")
+                if require_artifact_proof:
+                    run = await session.get(ResearchRunRow, lease.run_id)
+                    assert run is not None  # Protected by the Run row lock.
+                    await validate_persisted_stage_artifacts(
+                        session,
+                        task_id=run.task_id,
+                        run_id=lease.run_id,
+                        stage=stage,
+                        fencing_token=lease.fencing_token,
+                    )
                 row.outcome = outcome.value
                 row.error = error
                 row.finished_at = func.clock_timestamp()

@@ -91,6 +91,9 @@ from enterprise_research.infrastructure.postgres import (
     build_async_engine,
     build_session_factory,
 )
+from enterprise_research.infrastructure.postgres.evidence_manifest_repository import (
+    PostgresResearchEvidenceManifestRepository,
+)
 from enterprise_research.infrastructure.postgres.plan_repository import (
     PostgresResearchPlanRepository,
 )
@@ -145,6 +148,7 @@ class EnterpriseResearchService:
             )
 
             if repository_backend == "memory":
+                evidence_manifest_repository = None
                 research_repository = InMemoryResearchRepository()
                 run_repository = InMemoryResearchRunRepository()
                 plan_repository = InMemoryResearchPlanRepository()
@@ -159,6 +163,9 @@ class EnterpriseResearchService:
                 if self._engine is None:
                     raise RuntimeError("PostgreSQL engine was not initialized.")
                 document_repository = PostgresRetrievedDocumentRepository(build_session_factory(self._engine))
+                evidence_manifest_repository = PostgresResearchEvidenceManifestRepository(
+                    build_session_factory(self._engine)
+                )
 
             else:
                 raise RuntimeError(
@@ -444,6 +451,7 @@ class EnterpriseResearchService:
                         ),
                         workload_settings=evidence_workload_settings,
                         max_concurrency=evidence_max_concurrency,
+                        manifest_repository=evidence_manifest_repository,
                     )
 
                 else:
@@ -501,6 +509,7 @@ class EnterpriseResearchService:
                 run_application,
                 stage_runner,
                 event_bus=run_event_bus,
+                enforce_artifact_proof=(repository_backend == "postgres"),
                 resume_inspector=ResearchSafeResumeInspector(
                     run_application,
                     research_repository,
@@ -548,6 +557,7 @@ class EnterpriseResearchService:
                     "research_tasks",
                     "research_runs",
                     "research_run_stage_attempts",
+                    "research_run_evidence_manifests",
                     "research_plans",
                     "research_plan_questions",
                     "research_source_documents",

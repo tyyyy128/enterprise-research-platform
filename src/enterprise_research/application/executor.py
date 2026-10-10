@@ -75,6 +75,7 @@ class ResearchRunExecutor:
         *,
         lease_ttl_seconds: int = 30,
         resume_inspector: ResearchSafeResumeInspector | None = None,
+        enforce_artifact_proof: bool = False,
     ) -> None:
         validate_lease_ttl(lease_ttl_seconds)
         self._lease_ttl_seconds = lease_ttl_seconds
@@ -83,6 +84,7 @@ class ResearchRunExecutor:
         self._stage_runner = stage_runner
         self._event_bus = event_bus
         self._resume_inspector = resume_inspector
+        self._enforce_artifact_proof = enforce_artifact_proof
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
 
     @property
@@ -282,6 +284,17 @@ class ResearchRunExecutor:
                 if stage != ResearchRunStatus.COMPLETED:
                     try:
                         await self._stage_runner.run_stage(task_id, run_id, stage, lease=lease)
+                        # A normal StageRunner return is not durable proof.
+                        # PostgreSQL production uses a fenced, same-transaction
+                        # artifact inspection + Journal COMMITTED update.
+                        await self._application.finish_stage(
+                            task_id,
+                            run_id,
+                            stage,
+                            lease=lease,
+                            outcome=ResearchStageOutcome.COMPLETED,
+                            require_artifact_proof=self._enforce_artifact_proof,
+                        )
                     except ResearchRunLeaseLostError:
                         raise
                     except Exception as exc:
@@ -290,9 +303,6 @@ class ResearchRunExecutor:
                             task_id, run_id, stage, lease=lease, outcome=ResearchStageOutcome.FAILED, error=message
                         )
                         raise
-                    await self._application.finish_stage(
-                        task_id, run_id, stage, lease=lease, outcome=ResearchStageOutcome.COMPLETED
-                    )
 
         except asyncio.CancelledError:
             if self._event_bus is not None:

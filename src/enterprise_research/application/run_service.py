@@ -187,11 +187,16 @@ class ResearchRunApplicationService:
         lease: ResearchRunLease,
         outcome: ResearchStageOutcome,
         error: str | None = None,
+        require_artifact_proof: bool = False,
     ) -> ResearchStageAttempt:
-        """Record a stage outcome without certifying external side effects."""
+        """Record an outcome; SUCCESS can require an atomic durable proof."""
         if lease.run_id != run_id:
             raise ResearchRunLeaseLostError("Stage attempt lease refers to a different run.")
         await self.get_run(task_id, run_id)
+        if require_artifact_proof:
+            return await self._run_repository.finish_stage(
+                lease, stage, outcome=outcome, error=error, require_artifact_proof=True
+            )
         return await self._run_repository.finish_stage(lease, stage, outcome=outcome, error=error)
 
     async def inspect_stage_attempts(self, task_id: UUID, run_id: UUID) -> list[ResearchStageAttempt]:

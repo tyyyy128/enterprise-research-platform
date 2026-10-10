@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from uuid import UUID
 
+from enterprise_research.application.errors import ResearchStageCompletionError
 from enterprise_research.application.run_lease import (
     ResearchRunLease,
     ResearchRunLeaseLostError,
@@ -172,8 +173,9 @@ class InMemoryResearchRunRepository:
         *,
         outcome: ResearchStageOutcome,
         error: str | None = None,
+        require_artifact_proof: bool = False,
     ) -> ResearchStageAttempt:
-        """Finish only an existing STARTED attempt of the current owner."""
+        """Finish one attempt; memory has no durable atomic artifact proof."""
         validate_stage(stage)
         error = validate_stage_finish(outcome, error)
         async with self._lock:
@@ -182,6 +184,10 @@ class InMemoryResearchRunRepository:
             started = self._stage_attempts.get(key)
             if started is None or started.outcome != ResearchStageOutcome.STARTED:
                 raise ResearchStageJournalConflictError("Stage attempt is missing or already finished.")
+            if require_artifact_proof:
+                raise ResearchStageCompletionError(
+                    "In-memory repository cannot certify durable stage artifacts; use PostgreSQL."
+                )
             finished = ResearchStageAttempt(
                 run_id=started.run_id,
                 stage=stage,
