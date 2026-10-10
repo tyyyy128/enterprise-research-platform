@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
+from enterprise_research.application.report_writing import ResearchRunReportArtifact
 from enterprise_research.domain import (
     Claim,
     ClaimStatus,
@@ -268,4 +269,32 @@ class ResearchRunResponse(BaseModel):
             started_at=run.started_at,
             completed_at=run.completed_at,
             error=run.error,
+        )
+
+
+class ResearchRunReportResponse(BaseModel):
+    """Immutable, run-owned final report; different from the task-level report."""
+
+    task_id: UUID
+    run_id: UUID
+    fencing_token: int
+    title: str
+    body: str
+    citations: list[dict[str, Any]]
+    body_sha256: str
+    payload_sha256: str
+    created_at: datetime
+
+    @classmethod
+    def from_artifact(cls, artifact: ResearchRunReportArtifact) -> ResearchRunReportResponse:
+        return cls(
+            task_id=artifact.task_id,
+            run_id=artifact.run_id,
+            fencing_token=artifact.fencing_token,
+            title=artifact.title,
+            body=artifact.body,
+            citations=list(artifact.citations),
+            body_sha256=artifact.body_sha256,
+            payload_sha256=artifact.payload_sha256,
+            created_at=artifact.created_at,
         )

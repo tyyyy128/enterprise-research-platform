@@ -12,6 +12,7 @@ from enterprise_research.application.evidence_progress import EvidenceProgressCa
 from enterprise_research.application.planning_service import (
     ResearchPlanningService,
 )
+from enterprise_research.application.report_writing import ResearchReportWritingService
 from enterprise_research.application.retrieval_service import (
     ResearchRetrievalService,
 )
@@ -32,12 +33,14 @@ class ResearchPipelineStageRunner:
         retrieval_service: ResearchRetrievalService | None = None,
         evidence_extraction_service: (ResearchEvidenceExtractionService | None) = None,
         evidence_progress_callback: EvidenceProgressCallback | None = None,
+        report_writing_service: ResearchReportWritingService | None = None,
     ) -> None:
         self._planning_service = planning_service
         self._search_service = search_service
         self._retrieval_service = retrieval_service
         self._evidence_extraction_service = evidence_extraction_service
         self._evidence_progress_callback = evidence_progress_callback
+        self._report_writing_service = report_writing_service
 
     async def run_stage(
         self,
@@ -102,8 +105,11 @@ class ResearchPipelineStageRunner:
             return
 
         if stage == ResearchRunStatus.WRITING:
-            raise ResearchStageUnavailableError(
-                "WRITING has no report writer or durable report completion proof; cannot complete the research run."
-            )
+            if self._report_writing_service is None:
+                raise ResearchStageUnavailableError(
+                    "WRITING has no report writer configured; a Run cannot complete without its report."
+                )
+            await self._report_writing_service.write_run(task_id, run_id, lease=lease)
+            return
 
         raise ResearchStageUnavailableError(f"Unsupported research stage: {stage!s}.")

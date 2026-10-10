@@ -24,6 +24,7 @@ from enterprise_research.api import (
     CreateSourceRequest,
     EvidenceResponse,
     ResearchReportResponse,
+    ResearchRunReportResponse,
     ResearchRunResponse,
     ResearchTaskResponse,
     SourceResponse,
@@ -54,6 +55,7 @@ from enterprise_research.application.evidence_workload import (
     EvidenceWorkloadSettings,
 )
 from enterprise_research.application.graph_checkpoint import LangGraphCheckpointReader
+from enterprise_research.application.report_writing import ResearchReportWritingService
 from enterprise_research.application.run_events import (
     ResearchRunEventBus,
     RunEventHistoryExpired,
@@ -62,6 +64,7 @@ from enterprise_research.domain import (
     Claim,
     Evidence,
     InvalidReportError,
+    ResearchRunStatus,
     Source,
     UnknownClaimError,
     UnknownEvidenceError,
@@ -97,6 +100,7 @@ from enterprise_research.infrastructure.postgres.evidence_manifest_repository im
 from enterprise_research.infrastructure.postgres.plan_repository import (
     PostgresResearchPlanRepository,
 )
+from enterprise_research.infrastructure.postgres.report_artifacts import PostgresResearchRunReportRepository
 from enterprise_research.infrastructure.retrieval import (
     TavilyExtractSettings,
     TavilyExtractWebContentFetcher,
@@ -127,6 +131,7 @@ class EnterpriseResearchService:
         self._run_application: ResearchRunApplicationService | None = None
         self._run_executor: ResearchRunExecutor | None = None
         self._run_event_bus: ResearchRunEventBus | None = None
+        self._report_repository: PostgresResearchRunReportRepository | None = None
         self._engine: AsyncEngine | None = None
         self._graph_checkpoint_stack: AsyncExitStack | None = None
 
@@ -149,6 +154,7 @@ class EnterpriseResearchService:
 
             if repository_backend == "memory":
                 evidence_manifest_repository = None
+                report_repository = None
                 research_repository = InMemoryResearchRepository()
                 run_repository = InMemoryResearchRunRepository()
                 plan_repository = InMemoryResearchPlanRepository()
@@ -166,6 +172,7 @@ class EnterpriseResearchService:
                 evidence_manifest_repository = PostgresResearchEvidenceManifestRepository(
                     build_session_factory(self._engine)
                 )
+                report_repository = PostgresResearchRunReportRepository(build_session_factory(self._engine))
 
             else:
                 raise RuntimeError(
@@ -463,12 +470,23 @@ class EnterpriseResearchService:
                         "'openai-compatible'."
                     )
 
+                writer_backend = os.getenv("ENTERPRISE_RESEARCH_WRITER_BACKEND", "disabled").strip().lower()
+                if writer_backend == "disabled":
+                    report_writing_service = None
+                elif writer_backend == "verified-claims":
+                    if report_repository is None or evidence_extraction_service is None:
+                        raise RuntimeError("Verified-claims writer requires PostgreSQL and a real evidence extractor.")
+                    report_writing_service = ResearchReportWritingService(report_repository)
+                else:
+                    raise RuntimeError("ENTERPRISE_RESEARCH_WRITER_BACKEND must be 'disabled' or 'verified-claims'.")
+
                 stage_runner = ResearchPipelineStageRunner(
                     planning_service,
                     search_service,
                     retrieval_service=retrieval_service,
                     evidence_extraction_service=evidence_extraction_service,
                     evidence_progress_callback=run_event_bus.publish_evidence_progress,
+                    report_writing_service=report_writing_service,
                 )
 
             else:
@@ -531,6 +549,7 @@ class EnterpriseResearchService:
             self._run_application = None
             self._run_executor = None
             self._run_event_bus = None
+            self._report_repository = None
             self._deps = None
 
             raise
@@ -539,6 +558,7 @@ class EnterpriseResearchService:
         self._run_application = run_application
         self._run_executor = run_executor
         self._run_event_bus = run_event_bus
+        self._report_repository = report_repository
 
     async def _build_postgres_repositories(
         self,
@@ -558,6 +578,7 @@ class EnterpriseResearchService:
                     "research_runs",
                     "research_run_stage_attempts",
                     "research_run_evidence_manifests",
+                    "research_run_report_artifacts",
                     "research_plans",
                     "research_plan_questions",
                     "research_source_documents",
@@ -597,6 +618,7 @@ class EnterpriseResearchService:
         self._application = None
         self._run_application = None
         self._run_event_bus = None
+        self._report_repository = None
 
         if self._graph_checkpoint_stack is not None:
             await self._graph_checkpoint_stack.aclose()
@@ -647,6 +669,15 @@ class EnterpriseResearchService:
             )
 
         return application
+
+    async def require_report_repository(self) -> PostgresResearchRunReportRepository:
+        """Only PostgreSQL exposes the run-specific report artifact."""
+        if self._report_repository is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="run report artifacts require the PostgreSQL repository",
+            )
+        return self._report_repository
 
     async def require_run_executor(
         self,
@@ -964,6 +995,28 @@ def build_router(service: EnterpriseResearchService) -> APIRouter:
             ) from exc
 
         return ResearchRunResponse.from_domain(run)
+
+    @router.get(
+        "/tasks/{task_id}/runs/{run_id}/report",
+        response_model=ResearchRunReportResponse,
+    )
+    async def get_run_report(
+        task_id: UUID,
+        run_id: UUID,
+        application: ResearchRunApplicationService = Depends(service.require_run_application),
+        repository: PostgresResearchRunReportRepository = Depends(service.require_report_repository),
+    ) -> ResearchRunReportResponse:
+        """Expose a run report only after the terminal PostgreSQL proof succeeds."""
+        try:
+            run = await application.get_run(task_id, run_id)
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        if run.status != ResearchRunStatus.COMPLETED:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="research run has not completed")
+        artifact = await repository.get(task_id, run_id)
+        if artifact is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="completed run report artifact is missing")
+        return ResearchRunReportResponse.from_artifact(artifact)
 
     @router.get("/tasks/{task_id}/runs/{run_id}/events")
     async def stream_run_events(

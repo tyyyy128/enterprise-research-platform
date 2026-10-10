@@ -218,6 +218,24 @@ class PostgresResearchRunRepository:
                 changed = (await session.execute(statement)).scalar_one_or_none()
                 if changed is None:
                     raise ResearchRunLeaseLostError("Run transition refused: lease lost or stale status.")
+                if run.status == ResearchRunStatus.COMPLETED:
+                    if expected_status != ResearchRunStatus.WRITING:
+                        from enterprise_research.application.errors import ResearchStageCompletionError
+
+                        raise ResearchStageCompletionError("Only WRITING may transition into a completed research Run.")
+                    # The status UPDATE owns the Run row lock until commit.
+                    # A failed report/JOURNAL proof rolls back COMPLETED.
+                    from enterprise_research.infrastructure.postgres.report_artifacts import (
+                        validate_run_terminal_report,
+                    )
+
+                    await validate_run_terminal_report(
+                        session,
+                        task_id=run.task_id,
+                        run_id=run.run_id,
+                        fencing_token=lease.fencing_token,
+                        require_writing_journal=True,
+                    )
 
     async def _require_stage_lease(
         self, session: AsyncSession, lease: ResearchRunLease, stage: ResearchRunStatus

@@ -42,7 +42,19 @@ async def validate_persisted_stage_artifacts(
 ) -> None:
     """Verify durable receipts while the caller still holds the Run lock."""
     if stage == ResearchRunStatus.WRITING:
-        ResearchStageCompletionValidator.validate(stage, StageArtifactSnapshot(frozenset()))
+        # 7C: the writer's durable report must match live run-scoped claims.
+        # Imported locally to avoid a cycle: report completion reuses the
+        # existing VERIFYING business artifact checks.
+        from enterprise_research.infrastructure.postgres.report_artifacts import validate_run_terminal_report
+
+        await validate_run_terminal_report(
+            session,
+            task_id=task_id,
+            run_id=run_id,
+            fencing_token=fencing_token,
+            require_writing_journal=False,
+        )
+        return
 
     # Serializes against administrative aggregate saves, which update the
     # shared task row before rewriting children. Fenced writers also lock Run

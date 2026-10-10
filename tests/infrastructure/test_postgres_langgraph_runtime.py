@@ -146,7 +146,10 @@ def test_real_postgres_checkpoint_journal_and_safe_resume():
                         await asyncio.sleep(0.01)
                     assert executor.active_count == 0
                     persisted = await repository.get(run.run_id)
-                    assert persisted is not None and persisted.status == ResearchRunStatus.COMPLETED
+                    assert persisted is not None and persisted.status == ResearchRunStatus.FAILED
+                    assert "WRITING proof missing" in (persisted.error or "")
+                    # The later stages use a no-op test runner: without a 7C
+                    # run report they may NOT reach a successful terminal state.
                     assert planning.calls == 1
                     assert ResearchRunStatus.SEARCHING in later.calls
                     assert ResearchRunStatus.PLANNING not in later.calls

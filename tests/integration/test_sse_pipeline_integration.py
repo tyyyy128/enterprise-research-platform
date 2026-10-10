@@ -123,6 +123,13 @@ class ApiDependencies:
     async def require_run_event_bus(self) -> ResearchRunEventBus:
         return self.bus
 
+    async def require_report_repository(self):
+        class NoRunReports:
+            async def get(self, task_id, run_id):
+                return None
+
+        return NoRunReports()
+
 
 @dataclass
 class Runtime:
@@ -290,6 +297,9 @@ def test_e2e_unimplemented_writing_fails_after_progress_and_replays_without_dupl
             assert runtime.evidence.calls == [(UUID(task_id), UUID(run_id))]
             saved = await runtime.run_application.get_run(UUID(task_id), UUID(run_id))
             assert saved.status == ResearchRunStatus.FAILED
+            # A failed run may not expose a "final" report via the new 7C API.
+            report = await client.get(f"{PREFIX}/tasks/{task_id}/runs/{run_id}/report")
+            assert report.status_code == 409
 
             # Reconnect after the VERIFYING stage: no duplicate delivery.
             cursor = events[4]["id"]

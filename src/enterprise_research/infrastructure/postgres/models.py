@@ -501,6 +501,34 @@ class ResearchEvidenceManifestRow(Base):
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ResearchRunReportRow(Base):
+    """Write-once, run/generation-scoped evidence-backed report snapshot."""
+
+    __tablename__ = "research_run_report_artifacts"
+    __table_args__ = (
+        CheckConstraint("fencing_token > 0", name="ck_run_report_fencing"),
+        CheckConstraint("length(btrim(title)) > 0", name="ck_run_report_title"),
+        CheckConstraint("length(btrim(body)) > 0", name="ck_run_report_body"),
+        CheckConstraint("length(body_sha256) = 64", name="ck_run_report_body_hash"),
+        CheckConstraint("length(payload_sha256) = 64", name="ck_run_report_payload_hash"),
+        CheckConstraint("jsonb_typeof(citations) = 'array'", name="ck_run_report_citations"),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    task_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    body_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ResearchPlanRow(Base):
     """Persisted structured research plan."""
 

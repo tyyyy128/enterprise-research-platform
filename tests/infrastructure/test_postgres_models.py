@@ -13,6 +13,7 @@ def test_expected_postgres_tables_are_registered() -> None:
         "research_runs",
         "research_run_stage_attempts",
         "research_run_evidence_manifests",
+        "research_run_report_artifacts",
         "research_plan_questions",
         "research_plans",
         "report_claims",

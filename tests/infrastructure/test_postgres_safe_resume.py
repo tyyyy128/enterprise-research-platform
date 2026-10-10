@@ -120,7 +120,10 @@ def test_postgres_explicit_resume_reuses_plan_and_blocks_competing_worker():
                     )
                 winning_runner.release.set()
                 await wait_idle(winner)
-                assert (await again.get(run.run_id)).status == ResearchRunStatus.COMPLETED
+                assert (await again.get(run.run_id)).status == ResearchRunStatus.FAILED
+                assert "WRITING proof missing" in ((await again.get(run.run_id)).error or "")
+                # Recovery itself succeeded, but the no-op writer has no
+                # durable 7C report and cannot finish the overall Run.
                 attempts = await again.list_stage_attempts(run.run_id)
                 assert len([attempt for attempt in attempts if attempt.stage == ResearchRunStatus.PLANNING]) == 1
             finally:

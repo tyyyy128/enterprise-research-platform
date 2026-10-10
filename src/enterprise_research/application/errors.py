@@ -38,3 +38,7 @@ class ResearchStageUnavailableError(ResearchApplicationError):
 
 class ResearchStageCompletionError(ResearchApplicationError):
     """Stage work returned but durable artifacts do not prove completion."""
+
+
+class ResearchReportWritingError(ResearchStageCompletionError):
+    """Writing cannot produce or validate an evidence-backed run report."""

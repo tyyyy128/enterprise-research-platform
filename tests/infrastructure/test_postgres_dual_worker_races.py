@@ -559,7 +559,10 @@ def test_two_recovery_executors_both_pass_preflight_but_only_one_dispatches():
                     await asyncio.sleep(0.02)
 
             await wait_idle()
-            assert (await runs.get_run(run.task_id, run.run_id)).status == ResearchRunStatus.COMPLETED
+            assert (await runs.get_run(run.task_id, run.run_id)).status == ResearchRunStatus.FAILED
+            assert "WRITING proof missing" in ((await runs.get_run(run.task_id, run.run_id)).error or "")
+            # The winning executor safely dispatched; its no-op report stage
+            # must not create a false terminal success in 7C.
             attempts = await runs.inspect_stage_attempts(run.task_id, run.run_id)
             assert len([a for a in attempts if a.stage == ResearchRunStatus.SEARCHING]) == 1
             assert len([a for a in attempts if a.stage == ResearchRunStatus.PLANNING]) == 1
