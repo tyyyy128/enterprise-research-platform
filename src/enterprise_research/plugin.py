@@ -113,6 +113,7 @@ from enterprise_research.infrastructure.postgres.claim_verification import Postg
 from enterprise_research.infrastructure.postgres.evidence_manifest_repository import (
     PostgresResearchEvidenceManifestRepository,
 )
+from enterprise_research.infrastructure.postgres.models import Base
 from enterprise_research.infrastructure.postgres.plan_repository import (
     PostgresResearchPlanRepository,
 )
@@ -720,27 +721,18 @@ class EnterpriseResearchService:
 
         try:
             async with engine.connect() as connection:
-                required_tables = (
-                    "research_tasks",
-                    "research_runs",
-                    "research_run_stage_attempts",
-                    "research_run_evidence_manifests",
-                    "research_run_report_artifacts",
-                    "research_run_claim_generations",
-                    "research_plans",
-                    "research_plan_questions",
-                    "research_source_documents",
-                )
-
-                for table_name in required_tables:
-                    table = await connection.scalar(text(f"SELECT to_regclass('public.{table_name}')"))
-
+                # Keep the startup gate aligned with every mapped research
+                # artifact, including the later 3F/3G/3H run receipts. A
+                # partially migrated database must fail BEFORE accepting a Run.
+                for table_name in sorted(Base.metadata.tables):
+                    table = await connection.scalar(
+                        text("SELECT to_regclass(:table_name)"),
+                        {"table_name": f"public.{table_name}"},
+                    )
                     if table is None:
                         raise RuntimeError(
-                            "Enterprise Research "
-                            "PostgreSQL schema is not "
-                            "initialized. Run "
-                            "'alembic upgrade head' first."
+                            f"Enterprise Research PostgreSQL schema is missing {table_name!r}; "
+                            "run 'alembic upgrade head' before starting the service."
                         )
 
         except Exception:
