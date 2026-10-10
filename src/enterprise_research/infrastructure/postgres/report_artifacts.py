@@ -83,7 +83,7 @@ async def _make_run_draft(session: AsyncSession, *, task_id: UUID, run_id: UUID,
     ).all()
     if not claims:
         raise ResearchReportWritingError(
-            "WRITING requires at least one supported Claim; claim generation is not implemented."
+            "WRITING requires at least one supported Claim; automatic Claim verification is not implemented."
         )
 
     links = (

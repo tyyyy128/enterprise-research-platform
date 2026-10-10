@@ -14,6 +14,7 @@ def test_expected_postgres_tables_are_registered() -> None:
         "research_run_stage_attempts",
         "research_run_evidence_manifests",
         "research_run_report_artifacts",
+        "research_run_claim_generations",
         "research_plan_questions",
         "research_plans",
         "report_claims",
@@ -109,4 +110,22 @@ def test_research_stage_attempts_reference_run_and_are_uniquely_fenced() -> None
         "ck_research_run_stage_attempts_finished_shape",
         "ck_research_run_stage_attempts_fence",
         "ck_research_run_stage_attempts_time_order",
+    }
+
+
+def test_run_claim_generation_receipt_is_run_scoped() -> None:
+    table = Base.metadata.tables["research_run_claim_generations"]
+    assert {column.name for column in table.primary_key.columns} == {"run_id"}
+    assert {fk.target_fullname for fk in table.foreign_keys} == {
+        "research_runs.id",
+        "research_tasks.id",
+    }
+    assert table.columns["fencing_token"].nullable is False
+    assert table.columns["candidate_count"].nullable is False
+    assert {constraint.name for constraint in table.constraints if constraint.name} >= {
+        "ck_run_claim_generation_fencing",
+        "ck_run_claim_generation_input_hash",
+        "ck_run_claim_generation_output_hash",
+        "ck_run_claim_generation_evidence",
+        "ck_run_claim_generation_claims",
     }

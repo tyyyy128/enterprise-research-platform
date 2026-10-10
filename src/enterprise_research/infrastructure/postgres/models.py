@@ -501,6 +501,38 @@ class ResearchEvidenceManifestRow(Base):
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ResearchRunClaimGenerationRow(Base):
+    """Write-once receipt binding candidate Claims to a fenced Run input snapshot."""
+
+    __tablename__ = "research_run_claim_generations"
+    __table_args__ = (
+        CheckConstraint("fencing_token > 0", name="ck_run_claim_generation_fencing"),
+        CheckConstraint("available_evidence_count >= 0", name="ck_run_claim_generation_available"),
+        CheckConstraint("candidate_count >= 0", name="ck_run_claim_generation_candidate_count"),
+        CheckConstraint("length(input_sha256) = 64", name="ck_run_claim_generation_input_hash"),
+        CheckConstraint("length(output_sha256) = 64", name="ck_run_claim_generation_output_hash"),
+        CheckConstraint("length(btrim(generator_model)) > 0", name="ck_run_claim_generation_model"),
+        CheckConstraint("jsonb_typeof(selected_evidence_ids) = 'array'", name="ck_run_claim_generation_evidence"),
+        CheckConstraint("jsonb_typeof(claim_ids) = 'array'", name="ck_run_claim_generation_claims"),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    task_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("research_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    available_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    selected_evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    claim_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    generator_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ResearchRunReportRow(Base):
     """Write-once, run/generation-scoped evidence-backed report snapshot."""
 

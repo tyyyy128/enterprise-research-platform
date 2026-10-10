@@ -42,3 +42,7 @@ class ResearchStageCompletionError(ResearchApplicationError):
 
 class ResearchReportWritingError(ResearchStageCompletionError):
     """Writing cannot produce or validate an evidence-backed run report."""
+
+
+class ResearchClaimGenerationError(ResearchStageCompletionError):
+    """Claim proposals could not be generated or persisted with valid provenance."""

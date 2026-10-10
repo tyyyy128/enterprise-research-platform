@@ -45,6 +45,7 @@ from enterprise_research.application import (
     ResearchTaskNotFoundError,
     SkeletonResearchStageRunner,
 )
+from enterprise_research.application.claim_generation import ClaimGenerationLimits, ResearchClaimGenerationService
 from enterprise_research.application.document_chunking import (
     DocumentChunkingSettings,
 )
@@ -75,6 +76,10 @@ from enterprise_research.infrastructure import (
     InMemoryResearchRunRepository,
     InMemoryRetrievedDocumentRepository,
 )
+from enterprise_research.infrastructure.claim_generation import (
+    OpenAICompatibleClaimGenerator,
+    OpenAICompatibleClaimGeneratorSettings,
+)
 from enterprise_research.infrastructure.evidence_extraction import (
     OpenAICompatibleEvidenceExtractor,
     OpenAICompatibleEvidenceExtractorSettings,
@@ -94,6 +99,7 @@ from enterprise_research.infrastructure.postgres import (
     build_async_engine,
     build_session_factory,
 )
+from enterprise_research.infrastructure.postgres.claim_generation import PostgresResearchClaimGenerationRepository
 from enterprise_research.infrastructure.postgres.evidence_manifest_repository import (
     PostgresResearchEvidenceManifestRepository,
 )
@@ -221,7 +227,13 @@ class EnterpriseResearchService:
                 .lower()
             )
 
+            claim_backend = os.getenv("ENTERPRISE_RESEARCH_CLAIM_BACKEND", "disabled").strip().lower()
+            if claim_backend not in {"disabled", "openai-compatible"}:
+                raise RuntimeError("ENTERPRISE_RESEARCH_CLAIM_BACKEND must be 'disabled' or 'openai-compatible'.")
+
             if planner_backend == "disabled":
+                if claim_backend != "disabled":
+                    raise RuntimeError("Claim generation requires a real planner and evidence extraction runtime.")
                 if search_backend != "disabled":
                     raise RuntimeError("Enterprise Research search requires a real planner backend.")
 
@@ -470,6 +482,39 @@ class EnterpriseResearchService:
                         "'openai-compatible'."
                     )
 
+                claim_generation_service = None
+                if claim_backend == "openai-compatible":
+                    if repository_backend != "postgres" or evidence_extraction_service is None or self._engine is None:
+                        raise RuntimeError("Claim generation requires PostgreSQL and a real evidence extractor.")
+                    try:
+                        claim_limits = ClaimGenerationLimits(
+                            max_evidence=int(os.getenv("ENTERPRISE_RESEARCH_CLAIM_MAX_EVIDENCE", "12")),
+                            max_excerpt_chars=int(os.getenv("ENTERPRISE_RESEARCH_CLAIM_MAX_EXCERPT_CHARS", "1800")),
+                            max_candidates=int(os.getenv("ENTERPRISE_RESEARCH_CLAIM_MAX_CANDIDATES", "12")),
+                            max_claim_chars=int(os.getenv("ENTERPRISE_RESEARCH_CLAIM_MAX_CLAIM_CHARS", "600")),
+                            max_references_per_claim=int(
+                                os.getenv("ENTERPRISE_RESEARCH_CLAIM_MAX_REFERENCES_PER_CLAIM", "5")
+                            ),
+                        )
+                        claim_timeout = float(os.getenv("ENTERPRISE_RESEARCH_CLAIM_TIMEOUT_SECONDS", "60"))
+                    except ValueError as exc:
+                        raise RuntimeError("Enterprise Research claim generation limits are invalid.") from exc
+                    claim_model = _required_env("ENTERPRISE_RESEARCH_CLAIM_MODEL")
+                    claim_generation_service = ResearchClaimGenerationService(
+                        PostgresResearchClaimGenerationRepository(build_session_factory(self._engine)),
+                        OpenAICompatibleClaimGenerator(
+                            OpenAICompatibleClaimGeneratorSettings(
+                                base_url=_required_env("ENTERPRISE_RESEARCH_CLAIM_BASE_URL"),
+                                api_key=_required_env("ENTERPRISE_RESEARCH_CLAIM_API_KEY"),
+                                model=claim_model,
+                                limits=claim_limits,
+                                timeout_seconds=claim_timeout,
+                            )
+                        ),
+                        model=claim_model,
+                        limits=claim_limits,
+                    )
+
                 writer_backend = os.getenv("ENTERPRISE_RESEARCH_WRITER_BACKEND", "disabled").strip().lower()
                 if writer_backend == "disabled":
                     report_writing_service = None
@@ -487,6 +532,7 @@ class EnterpriseResearchService:
                     evidence_extraction_service=evidence_extraction_service,
                     evidence_progress_callback=run_event_bus.publish_evidence_progress,
                     report_writing_service=report_writing_service,
+                    claim_generation_service=claim_generation_service,
                 )
 
             else:
@@ -579,6 +625,7 @@ class EnterpriseResearchService:
                     "research_run_stage_attempts",
                     "research_run_evidence_manifests",
                     "research_run_report_artifacts",
+                    "research_run_claim_generations",
                     "research_plans",
                     "research_plan_questions",
                     "research_source_documents",

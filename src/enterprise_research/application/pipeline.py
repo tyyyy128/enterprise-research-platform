@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from enterprise_research.application.claim_generation import ResearchClaimGenerationService
 from enterprise_research.application.errors import ResearchStageUnavailableError
 from enterprise_research.application.evidence_extraction_service import (
     ResearchEvidenceExtractionService,
@@ -34,6 +35,7 @@ class ResearchPipelineStageRunner:
         evidence_extraction_service: (ResearchEvidenceExtractionService | None) = None,
         evidence_progress_callback: EvidenceProgressCallback | None = None,
         report_writing_service: ResearchReportWritingService | None = None,
+        claim_generation_service: ResearchClaimGenerationService | None = None,
     ) -> None:
         self._planning_service = planning_service
         self._search_service = search_service
@@ -41,6 +43,7 @@ class ResearchPipelineStageRunner:
         self._evidence_extraction_service = evidence_extraction_service
         self._evidence_progress_callback = evidence_progress_callback
         self._report_writing_service = report_writing_service
+        self._claim_generation_service = claim_generation_service
 
     async def run_stage(
         self,
@@ -102,6 +105,8 @@ class ResearchPipelineStageRunner:
                     lease=lease,
                 )
 
+            if self._claim_generation_service is not None:
+                await self._claim_generation_service.generate_run(task_id, run_id, lease=lease)
             return
 
         if stage == ResearchRunStatus.WRITING:
