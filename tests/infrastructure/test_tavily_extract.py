@@ -17,6 +17,7 @@ def create_fetcher(
     transport: httpx.MockTransport,
     *,
     max_content_chars: int = 1_000_000,
+    oversize_policy: str = "reject",
 ) -> tuple[
     TavilyExtractWebContentFetcher,
     httpx.AsyncClient,
@@ -30,6 +31,7 @@ def create_fetcher(
         extract_timeout_seconds=30.0,
         http_timeout_seconds=60.0,
         max_content_chars=(max_content_chars),
+        oversize_policy=oversize_policy,
     )
 
     return (
@@ -310,6 +312,92 @@ def test_content_size_limit_is_enforced() -> None:
     asyncio.run(run())
 
 
+def test_opt_in_truncation_preserves_exact_source_prefix_and_provenance() -> None:
+    async def run() -> None:
+        raw = "# Revenue\n\n" + "内容" * 16 + " FINANCIAL DATA"
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [{"url": "https://example.com/report", "raw_content": raw}],
+                    "failed_results": [],
+                },
+            )
+
+        fetcher, client = create_fetcher(
+            httpx.MockTransport(handler),
+            max_content_chars=18,
+            oversize_policy="truncate",
+        )
+        try:
+            result = await fetcher.fetch("https://example.com/report")
+        finally:
+            await client.aclose()
+
+        assert result.content == raw[:18]
+        assert len(result.content) == 18
+        assert result.metadata["retrieval_truncated"] is True
+        assert result.metadata["retrieval_original_content_chars"] == len(raw)
+        assert result.metadata["retrieval_stored_content_chars"] == 18
+        assert result.metadata["retrieval_truncation_strategy"] == "prefix"
+        assert result.metadata["provider"] == "tavily-extract"
+
+    asyncio.run(run())
+
+
+def test_truncation_keeps_complete_short_document_unmarked() -> None:
+    async def run() -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [{"url": "https://example.com/report", "raw_content": "Revenue: 123"}],
+                    "failed_results": [],
+                },
+            )
+
+        fetcher, client = create_fetcher(
+            httpx.MockTransport(handler),
+            max_content_chars=12,
+            oversize_policy="truncate",
+        )
+        try:
+            result = await fetcher.fetch("https://example.com/report")
+        finally:
+            await client.aclose()
+
+        assert result.content == "Revenue: 123"
+        assert "retrieval_truncated" not in result.metadata
+
+    asyncio.run(run())
+
+
+def test_truncation_rejects_blank_prefix_even_when_full_page_is_not_blank() -> None:
+    async def run() -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [{"url": "https://example.com/report", "raw_content": "    real data"}],
+                    "failed_results": [],
+                },
+            )
+
+        fetcher, client = create_fetcher(
+            httpx.MockTransport(handler),
+            max_content_chars=3,
+            oversize_policy="truncate",
+        )
+        try:
+            with pytest.raises(TavilyExtractWebFetchError, match="truncated content is blank"):
+                await fetcher.fetch("https://example.com/report")
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
 def test_invalid_target_url_fails_before_http() -> None:
     async def run() -> None:
         calls = 0
@@ -385,3 +473,6 @@ def test_settings_validate_configuration() -> None:
             api_key="secret",
             max_content_chars=0,
         )
+
+    with pytest.raises(ValueError, match="oversize_policy"):
+        TavilyExtractSettings(api_key="secret", oversize_policy="ignore")

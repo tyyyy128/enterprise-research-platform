@@ -110,6 +110,8 @@ def configure_real_planner(
         "ENTERPRISE_RESEARCH_EVIDENCE_MAX_CONCURRENCY",
         "4",
     )
+    monkeypatch.delenv("ENTERPRISE_RESEARCH_EVIDENCE_SELECTION_MODE", raising=False)
+    monkeypatch.delenv("ENTERPRISE_RESEARCH_EVIDENCE_FOCUS_TERMS", raising=False)
 
 
 def test_runtime_accepts_openai_compatible_evidence_backend(
@@ -244,8 +246,10 @@ def test_runtime_applies_evidence_workload_budget_settings(
             "ENTERPRISE_RESEARCH_EVIDENCE_MAX_TOTAL_CHUNKS",
             "5",
         )
+        monkeypatch.setenv("ENTERPRISE_RESEARCH_EVIDENCE_SELECTION_MODE", "focus")
+        monkeypatch.setenv("ENTERPRISE_RESEARCH_EVIDENCE_FOCUS_TERMS", "revenue,2024")
 
-        captured: dict[str, int] = {}
+        captured: dict[str, object] = {}
         sentinel = object()
 
         def build_settings(
@@ -253,11 +257,15 @@ def test_runtime_applies_evidence_workload_budget_settings(
             max_documents: int,
             max_chunks_per_document: int,
             max_total_chunks: int,
+            selection_mode: str,
+            focus_terms: tuple[str, ...],
         ) -> object:
             captured.update(
-                max_documents=(max_documents),
-                max_chunks_per_document=(max_chunks_per_document),
-                max_total_chunks=(max_total_chunks),
+                max_documents=max_documents,
+                max_chunks_per_document=max_chunks_per_document,
+                max_total_chunks=max_total_chunks,
+                selection_mode=selection_mode,
+                focus_terms=focus_terms,
             )
 
             return sentinel
@@ -277,6 +285,8 @@ def test_runtime_applies_evidence_workload_budget_settings(
                 "max_documents": 2,
                 "max_chunks_per_document": 3,
                 "max_total_chunks": 5,
+                "selection_mode": "focus",
+                "focus_terms": ("revenue", "2024"),
             }
 
         finally:

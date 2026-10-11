@@ -41,6 +41,7 @@ class TavilyExtractSettings:
     http_timeout_seconds: float = 60.0
 
     max_content_chars: int = 1_000_000
+    oversize_policy: Literal["reject", "truncate"] = "reject"
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -63,6 +64,9 @@ class TavilyExtractSettings:
 
         if self.max_content_chars < 1:
             raise ValueError("max_content_chars must be at least 1.")
+
+        if self.oversize_policy not in {"reject", "truncate"}:
+            raise ValueError("Unsupported Tavily oversize_policy.")
 
     @property
     def extract_url(self) -> str:
@@ -184,8 +188,16 @@ class TavilyExtractWebContentFetcher:
             if not content.strip():
                 raise TavilyExtractWebFetchError("Tavily Extract returned empty web content.")
 
-            if len(content) > self._settings.max_content_chars:
-                raise TavilyExtractWebFetchError("Tavily Extract content exceeds max_content_chars.")
+            original_content_chars = len(content)
+            truncated = original_content_chars > self._settings.max_content_chars
+            if truncated:
+                if self._settings.oversize_policy != "truncate":
+                    raise TavilyExtractWebFetchError("Tavily Extract content exceeds max_content_chars.")
+                # Preserve the original leading characters without introducing
+                # synthetic text that could be mistaken for source evidence.
+                content = content[: self._settings.max_content_chars]
+                if not content.strip():
+                    raise TavilyExtractWebFetchError("Tavily Extract truncated content is blank.")
 
             metadata: dict[
                 str,
@@ -194,6 +206,14 @@ class TavilyExtractWebContentFetcher:
                 "provider": ("tavily-extract"),
                 "extract_depth": (self._settings.extract_depth),
             }
+
+            if truncated:
+                # Consumers must not interpret a stored prefix as a complete
+                # webpage. Evidence quotes remain literal substrings of source.
+                metadata["retrieval_truncated"] = True
+                metadata["retrieval_original_content_chars"] = original_content_chars
+                metadata["retrieval_stored_content_chars"] = len(content)
+                metadata["retrieval_truncation_strategy"] = "prefix"
 
             if payload.request_id is not None:
                 metadata["request_id"] = payload.request_id

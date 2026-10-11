@@ -126,3 +126,139 @@ def test_invalid_configuration_fails_fast():
         OpenAICompatibleReportSynthesisSettings("", "token", "mock")
     with pytest.raises(ValueError, match="timeout"):
         OpenAICompatibleReportSynthesisSettings("https://llm.example", "token", "mock", timeout_seconds=0)
+
+
+@pytest.mark.parametrize("fence", ["json", ""])
+def test_model_accepts_exact_complete_json_code_fence_only(fence):
+    async def exercise():
+        ctx = context()
+        ids = [str(item.claim_id) for item in ctx.claims]
+        json_text = json.dumps({"highlights": [ids[0]], "sections": [{"heading": "Key findings", "claim_ids": ids}]})
+        response_text = f"\n```{fence}\n{json_text}\n```\n"
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={"choices": [{"message": {"content": response_text}}]})
+            )
+        ) as client:
+            plan = await OpenAICompatibleReportSynthesisPlanner(_config(), client=client).compose(ctx)
+            assert [str(item) for item in plan.sections[0].claim_ids] == ids
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "Here is JSON: ```json\n{}\n```",
+        "```json\n{}\n``` trailing prose",
+        "```python\n{}\n```",
+        "```json\n{}\n```\n```json\n{}\n```",
+    ],
+)
+def test_model_rejects_fences_with_extra_prose_or_unapproved_language(invalid):
+    async def exercise():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={"choices": [{"message": {"content": invalid}}]})
+            )
+        ) as client:
+            with pytest.raises(ReportSynthesisAdapterError, match=r"malformed JSON \(syntax\)"):
+                await OpenAICompatibleReportSynthesisPlanner(_config(), client=client).compose(context())
+
+    asyncio.run(exercise())
+
+
+def test_json_object_mode_is_opt_in_and_does_not_expose_keys():
+    async def exercise():
+        ctx = context()
+        ids = [str(item.claim_id) for item in ctx.claims]
+
+        def respond(request):
+            body = json.loads(request.content)
+            assert body["response_format"] == {"type": "json_object"}
+            assert request.headers["Authorization"] == "Bearer test-token"
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"highlights": [], "sections": [{"heading": "Key findings", "claim_ids": ids}]}
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            planner = OpenAICompatibleReportSynthesisPlanner(
+                OpenAICompatibleReportSynthesisSettings(
+                    "https://llm.example/v1", "test-token", "3h-mock", response_format="json_object"
+                ),
+                client=client,
+            )
+            plan = await planner.compose(ctx)
+            assert len(plan.sections[0].claim_ids) == 2
+
+    asyncio.run(exercise())
+
+
+def test_default_request_does_not_force_optional_provider_json_object_mode():
+    async def exercise():
+        ctx = context()
+        ids = [str(item.claim_id) for item in ctx.claims]
+
+        def respond(request):
+            assert "response_format" not in json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"highlights": [], "sections": [{"heading": "Key findings", "claim_ids": ids}]}
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            await OpenAICompatibleReportSynthesisPlanner(_config(), client=client).compose(ctx)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "response_payload, category",
+    [
+        ({"choices": []}, "response_shape"),
+        ({"choices": [{"message": {"content": ["not-text"]}}]}, "content_type_or_length"),
+        ({"choices": [{"message": {"content": "[]"}}]}, "schema"),
+        ({"choices": [{"finish_reason": "length", "message": {"content": "{}"}}]}, "truncated"),
+        ({"choices": [{"finish_reason": "content_filter", "message": {"content": "{}"}}]}, "filtered"),
+    ],
+)
+def test_diagnostics_are_bounded_and_never_reveal_raw_content(response_payload, category):
+    async def exercise():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response_payload))
+        ) as client:
+            with pytest.raises(ReportSynthesisAdapterError) as info:
+                await OpenAICompatibleReportSynthesisPlanner(_config(), client=client).compose(context())
+            assert category in str(info.value)
+            assert "not-text" not in str(info.value)
+            assert "test-token" not in str(info.value)
+
+    asyncio.run(exercise())
+
+
+def test_invalid_optional_response_format_is_rejected_before_network():
+    with pytest.raises(ValueError, match="response_format"):
+        OpenAICompatibleReportSynthesisSettings(
+            "https://llm.example/v1", "test-token", "3h-mock", response_format="random"
+        )

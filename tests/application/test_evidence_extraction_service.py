@@ -425,6 +425,49 @@ def test_wrong_run_state_is_rejected_before_model_call() -> None:
     asyncio.run(run_test())
 
 
+def test_focused_selection_preserves_mechanical_evidence_offsets() -> None:
+    async def run_test() -> None:
+        prefix = "X" * 40
+        quote = "Revenue was 100 dollars"
+        document = prefix + quote + " in 2024."
+        setup = await setup_run(content=document)
+        extractor = StaticEvidenceExtractor(
+            lambda chunk: [EvidenceCandidate(content=quote, relevance_score=0.95)] if quote in chunk.content else []
+        )
+        service = build_service(
+            setup,
+            extractor,
+            chunk_size_chars=40,
+            overlap_chars=0,
+            workload_settings=EvidenceWorkloadSettings(
+                max_documents=1,
+                max_chunks_per_document=1,
+                max_total_chunks=1,
+                selection_mode="focus",
+                focus_terms=("revenue",),
+            ),
+        )
+
+        summary = await service.extract_run(
+            setup.aggregate.task.task_id,
+            setup.run.run_id,
+        )
+        assert summary.scheduled_chunk_count == 1
+        assert summary.verified_count == 1
+        assert len(extractor.calls) == 1
+        assert extractor.calls[0].index == 1
+        assert extractor.calls[0].start_offset == 40
+
+        persisted = await setup.research_repository.get(setup.aggregate.task.task_id)
+        assert persisted is not None
+        evidence = next(iter(persisted.evidence.values()))
+        start = document.index(quote)
+        assert evidence.locator == f"chars:{start}-{start + len(quote)}"
+        assert document[start : start + len(quote)] == evidence.content
+
+    asyncio.run(run_test())
+
+
 def test_workload_budget_caps_chunks_before_model_call() -> None:
     async def run_test() -> None:
         setup = await setup_run(content="abcdefghijklmnopqrstuvwxyz")

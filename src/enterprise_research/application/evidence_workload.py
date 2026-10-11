@@ -21,6 +21,8 @@ class EvidenceWorkloadSettings:
     max_documents: int = 4
     max_chunks_per_document: int = 8
     max_total_chunks: int = 24
+    selection_mode: str = "uuid"
+    focus_terms: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.max_documents < 1:
@@ -31,6 +33,26 @@ class EvidenceWorkloadSettings:
 
         if self.max_total_chunks < 1:
             raise ValueError("max_total_chunks must be at least 1.")
+
+        if self.selection_mode not in {"uuid", "focus"}:
+            raise ValueError("selection_mode must be 'uuid' or 'focus'.")
+        if self.selection_mode == "focus" and not self.focus_terms:
+            raise ValueError("focus selection requires at least one focus term.")
+        if self.selection_mode == "uuid" and self.focus_terms:
+            raise ValueError("focus terms require selection_mode='focus'.")
+        if len(self.focus_terms) > 8:
+            raise ValueError("focus selection accepts at most 8 terms.")
+
+        normalized: set[str] = set()
+        for term in self.focus_terms:
+            if not isinstance(term, str) or not term.strip() or len(term) > 64:
+                raise ValueError("each focus term must contain 1 to 64 characters.")
+            if "\n" in term or "\r" in term:
+                raise ValueError("focus terms must be single-line text.")
+            lowered = term.strip().casefold()
+            if lowered in normalized:
+                raise ValueError("focus terms must be unique ignoring case.")
+            normalized.add(lowered)
 
 
 @dataclass(
@@ -78,16 +100,41 @@ def plan_evidence_workload(
 
     nonempty_documents = [document for document in documents if document.chunks]
 
-    ordered_documents = sorted(
-        nonempty_documents,
-        key=lambda document: str(document.source_id),
-    )
-
-    selected_documents = ordered_documents[: settings.max_documents]
-
     available_chunk_count = sum(len(document.chunks) for document in nonempty_documents)
 
-    bounded_chunks = [document.chunks[: settings.max_chunks_per_document] for document in selected_documents]
+    if settings.selection_mode == "focus":
+        # Rank only *existing* chunks. Never stitch text, change character
+        # offsets, or invent a new excerpt to satisfy the query.
+        terms = tuple(term.strip().casefold() for term in settings.focus_terms)
+
+        def hits(chunk: DocumentChunk) -> int:
+            text = chunk.content.casefold()
+            return sum(term in text for term in terms)
+
+        ranked = [
+            (
+                document,
+                tuple(sorted(document.chunks, key=lambda chunk: (-hits(chunk), chunk.index))),
+            )
+            for document in nonempty_documents
+        ]
+        # Prefer more distinct term hits; break equal scores by earlier
+        # original chunk and finally the deterministic source UUID.
+        ranked.sort(
+            key=lambda pair: (
+                -hits(pair[1][0]),
+                pair[1][0].index,
+                str(pair[0].source_id),
+            )
+        )
+    else:
+        # Production default stays byte-for-byte equivalent to the original
+        # UUID-based, prefix-chunk planning policy.
+        ranked = [(document, document.chunks) for document in nonempty_documents]
+        ranked.sort(key=lambda pair: str(pair[0].source_id))
+
+    selected = ranked[: settings.max_documents]
+    bounded_chunks = [chunks[: settings.max_chunks_per_document] for _, chunks in selected]
 
     items: list[EvidenceChunkWorkItem] = []
 
@@ -95,8 +142,8 @@ def plan_evidence_workload(
     # large document from consuming the entire
     # run-level chunk budget.
     for chunk_index in range(settings.max_chunks_per_document):
-        for document, chunks in zip(
-            selected_documents,
+        for (document, _), chunks in zip(
+            selected,
             bounded_chunks,
             strict=True,
         ):
@@ -120,7 +167,7 @@ def plan_evidence_workload(
 
     return EvidenceWorkloadPlan(
         eligible_document_count=len(nonempty_documents),
-        selected_document_count=len(selected_documents),
+        selected_document_count=len(selected),
         available_chunk_count=(available_chunk_count),
         scheduled_chunk_count=(scheduled_chunk_count),
         skipped_chunk_count=(available_chunk_count - scheduled_chunk_count),

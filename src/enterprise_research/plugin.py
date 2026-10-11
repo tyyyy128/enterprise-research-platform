@@ -376,6 +376,12 @@ class EnterpriseResearchService:
                                         "1000000",
                                     )
                                 ),
+                                oversize_policy=os.getenv(
+                                    "ENTERPRISE_RESEARCH_RETRIEVAL_OVERSIZE_POLICY",
+                                    "reject",
+                                )
+                                .strip()
+                                .lower(),
                             )
                         ),
                     )
@@ -474,10 +480,28 @@ class EnterpriseResearchService:
                         if evidence_max_concurrency < 1:
                             raise ValueError("evidence max concurrency must be at least 1.")
 
+                        evidence_selection_mode = (
+                            os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_SELECTION_MODE",
+                                "uuid",
+                            )
+                            .strip()
+                            .lower()
+                        )
+                        evidence_focus_terms = tuple(
+                            term.strip()
+                            for term in os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_FOCUS_TERMS",
+                                "",
+                            ).split(",")
+                            if term.strip()
+                        )
                         evidence_workload_settings = EvidenceWorkloadSettings(
                             max_documents=evidence_max_documents,
-                            max_chunks_per_document=(evidence_max_chunks_per_document),
+                            max_chunks_per_document=evidence_max_chunks_per_document,
                             max_total_chunks=evidence_max_total_chunks,
+                            selection_mode=evidence_selection_mode,
+                            focus_terms=evidence_focus_terms,
                         )
 
                     except ValueError as exc:
@@ -616,6 +640,7 @@ class EnterpriseResearchService:
                                 model=synthesis_model,
                                 timeout_seconds=synthesis_timeout,
                                 temperature=synthesis_temperature,
+                                response_format=os.getenv("ENTERPRISE_RESEARCH_SYNTHESIS_RESPONSE_FORMAT", "text"),
                             )
                         ),
                         model=synthesis_model,
