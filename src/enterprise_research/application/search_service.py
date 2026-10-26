@@ -11,6 +11,11 @@ from enterprise_research.application.errors import (
     ResearchSearchError,
     ResearchTaskNotFoundError,
 )
+from enterprise_research.application.financial_source_discovery import (
+    FinancialSourceDiscoverySettings,
+    financial_discovery_query,
+    rank_financial_discovery_hits,
+)
 from enterprise_research.application.plan_repository import (
     ResearchPlanRepository,
 )
@@ -109,6 +114,7 @@ class ResearchSearchService:
         provider: SearchProvider,
         *,
         max_results_per_question: int = 5,
+        financial_discovery: FinancialSourceDiscoverySettings | None = None,
     ) -> None:
         if max_results_per_question < 1:
             raise ValueError("max_results_per_question must be at least 1")
@@ -118,6 +124,7 @@ class ResearchSearchService:
         self._plan_repository = plan_repository
         self._provider = provider
         self._max_results_per_question = max_results_per_question
+        self._financial_discovery = financial_discovery
 
     async def search_run(
         self,
@@ -167,7 +174,11 @@ class ResearchSearchService:
         changed = False
 
         for question in plan.questions:
-            query = question.question
+            query = (
+                financial_discovery_query(question.question, self._financial_discovery)
+                if self._financial_discovery is not None
+                else question.question
+            )
 
             try:
                 results = await self._provider.search(
@@ -180,10 +191,25 @@ class ResearchSearchService:
                 ) from exc
 
             bounded_results = list(results)[: self._max_results_per_question]
-            if not bounded_results:
+            if self._financial_discovery is not None:
+                ranked_hits = rank_financial_discovery_hits(bounded_results, self._financial_discovery)
+                candidate_results = [
+                    (
+                        hit.result,
+                        {
+                            "target_year": self._financial_discovery.target_year,
+                            "edition_hint": hit.edition_hint,
+                            "preferred_domain": hit.preferred_domain,
+                        },
+                    )
+                    for hit in ranked_hits
+                ]
+            else:
+                candidate_results = [(result, None) for result in bounded_results]
+            if not candidate_results:
                 missing_questions.append(question.question_id)
 
-            for result in bounded_results:
+            for result, discovery_hint in candidate_results:
                 canonical_url = canonicalize_url(str(result.url))
 
                 source_id = source_id_by_url.get(canonical_url)
@@ -218,6 +244,7 @@ class ResearchSearchService:
                     question_id=question.question_id,
                     question=question.question,
                     query=query,
+                    discovery_hint=discovery_hint,
                 )
 
                 if metadata_changed:
@@ -260,6 +287,7 @@ def _merge_search_hit(
     question_id: UUID,
     question: str,
     query: str,
+    discovery_hint: dict[str, str | bool] | None = None,
 ) -> tuple[Source, bool]:
     metadata = deepcopy(source.metadata)
 
@@ -280,6 +308,9 @@ def _merge_search_hit(
         "score": result.score,
         "snippet": result.snippet,
     }
+
+    if discovery_hint is not None:
+        hit["source_year_discovery"] = discovery_hint
 
     dedupe_key = (
         hit["run_id"],

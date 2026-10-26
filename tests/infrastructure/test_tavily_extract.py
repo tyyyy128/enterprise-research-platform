@@ -476,3 +476,29 @@ def test_settings_validate_configuration() -> None:
 
     with pytest.raises(ValueError, match="oversize_policy"):
         TavilyExtractSettings(api_key="secret", oversize_policy="ignore")
+
+
+def test_bounded_complete_financial_web_content_retains_deep_table() -> None:
+    """Retrieval budget must cover the *actual* year/unit/amount excerpt."""
+
+    async def run() -> None:
+        table = "INCOME STATEMENTS\n(In millions)\n2024 | 2023\nTotal revenue | 245,122 | 211,915"
+        body = ("# Annual report\n" + "." * 14_000) + table
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"results": [{"url": "https://microsoft.com/ar24", "raw_content": body}]})
+
+        fetcher, client = create_fetcher(
+            httpx.MockTransport(handler),
+            max_content_chars=30_000,
+            oversize_policy="truncate",
+        )
+        try:
+            result = await fetcher.fetch("https://microsoft.com/ar24")
+        finally:
+            await client.aclose()
+        assert result.content == body
+        assert "Total revenue | 245,122" in result.content
+        assert "retrieval_truncated" not in result.metadata
+
+    asyncio.run(run())

@@ -542,3 +542,124 @@ def test_one_missing_question_fails_without_committing_other_question_sources() 
         assert stored.sources == {}
 
     asyncio.run(run_test())
+
+
+def test_financial_discovery_enriches_search_and_tracks_only_eligible_candidates() -> None:
+    from enterprise_research.application.financial_source_discovery import (
+        FinancialSourceDiscoverySettings,
+        financial_discovery_query,
+    )
+
+    async def run_test() -> None:
+        research, runs, plans, aggregate, run, plan = await setup_searching_run()
+        policy = FinancialSourceDiscoverySettings(target_year="2024", preferred_domains=("microsoft.com",))
+        responses = {
+            financial_discovery_query(question.question, policy): [
+                SearchResult(
+                    title="Microsoft 2026 Annual Report",
+                    url="https://www.microsoft.com/investor/reports/ar26/",
+                    provider="fixture",
+                ),
+                SearchResult(
+                    title="FY2024 annual report (third-party)",
+                    url="https://www.microsoft.com.evil.example/investor/reports/ar24/",
+                    provider="fixture",
+                ),
+                SearchResult(
+                    title="Opaque financial source",
+                    url="https://cdn.example/opaque-document",
+                    provider="fixture",
+                ),
+                SearchResult(
+                    title="Microsoft 2024 Annual Report",
+                    url="https://www.microsoft.com/investor/reports/ar24/index.html",
+                    provider="fixture",
+                ),
+            ]
+            for question in plan.questions
+        }
+        provider = RecordingProvider(responses)
+        service = ResearchSearchService(research, runs, plans, provider, financial_discovery=policy)
+        touched = await service.search_run(aggregate.task.task_id, run.run_id)
+        stored = await research.get(aggregate.task.task_id)
+        assert stored is not None
+        assert len(provider.calls) == len(plan.questions)
+        assert all(max_results == 5 for _, max_results in provider.calls)
+        assert all(query.startswith("FY2024 original annual report") for query, _ in provider.calls)
+        assert len(stored.sources) == 3
+        assert "ar26" not in " ".join(str(source.url) for source in touched)
+        assert str(touched[0].url) == "https://www.microsoft.com/investor/reports/ar24/index.html"
+        first_hit = touched[0].metadata["search"]["hits"][0]
+        assert first_hit["source_year_discovery"] == {
+            "target_year": "2024",
+            "edition_hint": "matching",
+            "preferred_domain": True,
+        }
+        assert first_hit["query"] == provider.calls[0][0]
+        opaque = next(source for source in touched if "opaque-document" in str(source.url))
+        assert opaque.metadata["search"]["hits"][0]["source_year_discovery"]["edition_hint"] == "unknown"
+        assert [question.question for question in plan.questions] == [
+            "How reliable is durable execution?",
+            "How does recovery work?",
+        ]
+
+    asyncio.run(run_test())
+
+
+def test_financial_discovery_wrong_editions_fail_before_persisting_any_sources() -> None:
+    from enterprise_research.application.financial_source_discovery import (
+        FinancialSourceDiscoverySettings,
+        financial_discovery_query,
+    )
+
+    async def run_test() -> None:
+        research, runs, plans, aggregate, run, plan = await setup_searching_run()
+        policy = FinancialSourceDiscoverySettings(target_year="2024")
+        bad_results = [
+            SearchResult(
+                title="Microsoft 2026 Annual Report",
+                url="https://www.microsoft.com/investor/reports/ar26/index.html",
+                provider="fixture",
+            )
+        ]
+        provider = RecordingProvider(
+            {financial_discovery_query(question.question, policy): bad_results for question in plan.questions}
+        )
+        service = ResearchSearchService(research, runs, plans, provider, financial_discovery=policy)
+        with pytest.raises(ResearchSearchError, match="Search produced no sources"):
+            await service.search_run(aggregate.task.task_id, run.run_id)
+        stored = await research.get(aggregate.task.task_id)
+        assert stored is not None
+        assert stored.sources == {}
+        assert len(provider.calls) == len(plan.questions)
+
+    asyncio.run(run_test())
+
+
+def test_financial_discovery_deduplicates_repeated_searches() -> None:
+    from enterprise_research.application.financial_source_discovery import (
+        FinancialSourceDiscoverySettings,
+        financial_discovery_query,
+    )
+
+    async def run_test() -> None:
+        research, runs, plans, aggregate, run, plan = await setup_searching_run()
+        policy = FinancialSourceDiscoverySettings(target_year="2024")
+        results = [
+            SearchResult(
+                title="Microsoft 2024 Annual Report",
+                url="https://www.microsoft.com/investor/reports/ar24/index.html",
+                provider="fixture",
+            )
+        ]
+        provider = RecordingProvider({financial_discovery_query(q.question, policy): results for q in plan.questions})
+        service = ResearchSearchService(research, runs, plans, provider, financial_discovery=policy)
+        await service.search_run(aggregate.task.task_id, run.run_id)
+        await service.search_run(aggregate.task.task_id, run.run_id)
+        stored = await research.get(aggregate.task.task_id)
+        assert stored is not None
+        assert len(stored.sources) == 1
+        source = next(iter(stored.sources.values()))
+        assert len(source.metadata["search"]["hits"]) == len(plan.questions)
+
+    asyncio.run(run_test())

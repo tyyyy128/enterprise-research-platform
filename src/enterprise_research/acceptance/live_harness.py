@@ -561,7 +561,10 @@ async def collect_snapshot(sessions, task_id: UUID, run_id: UUID) -> dict[str, A
 @contextmanager
 def temporary_workload_env(env: dict[str, str]):
     """Bounded acceptance config; restores caller's original process environment."""
+    from enterprise_research.acceptance.financial_workload import financial_workload_overrides
+
     overrides = {**REQUIRED_BACKENDS, **SMALL_WORKLOAD}
+    overrides.update(financial_workload_overrides(env))
     previous = {key: env.get(key) for key in overrides}
     try:
         env.update(overrides)
@@ -593,7 +596,9 @@ async def execute_live(query: str, output_dir: Path, budget: LiveBudget, *, save
     from enterprise_research.plugin import EnterpriseResearchService, build_router
 
     env = dict(os.environ)
-    problems = preflight(env)
+    from enterprise_research.acceptance.financial_workload import financial_workload_issues
+
+    problems = [*preflight(env), *financial_workload_issues(env)]
     if problems:
         raise LiveAcceptanceError("Preflight failed: " + "; ".join(problems))
     service = EnterpriseResearchService()
@@ -725,7 +730,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    issues = preflight(dict(os.environ))
+    from enterprise_research.acceptance.financial_workload import financial_workload_issues
+
+    issues = [*preflight(dict(os.environ)), *financial_workload_issues(os.environ)]
     if not args.execute:
         print("3I-2 OFFLINE preflight: no provider or database connection is made.")
         for issue in issues:

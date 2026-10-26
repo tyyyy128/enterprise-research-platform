@@ -112,6 +112,7 @@ def configure_real_planner(
     )
     monkeypatch.delenv("ENTERPRISE_RESEARCH_EVIDENCE_SELECTION_MODE", raising=False)
     monkeypatch.delenv("ENTERPRISE_RESEARCH_EVIDENCE_FOCUS_TERMS", raising=False)
+    monkeypatch.delenv("ENTERPRISE_RESEARCH_EVIDENCE_PREFERRED_DOMAINS", raising=False)
 
 
 def test_runtime_accepts_openai_compatible_evidence_backend(
@@ -259,6 +260,7 @@ def test_runtime_applies_evidence_workload_budget_settings(
             max_total_chunks: int,
             selection_mode: str,
             focus_terms: tuple[str, ...],
+            preferred_domains: tuple[str, ...],
         ) -> object:
             captured.update(
                 max_documents=max_documents,
@@ -266,6 +268,7 @@ def test_runtime_applies_evidence_workload_budget_settings(
                 max_total_chunks=max_total_chunks,
                 selection_mode=selection_mode,
                 focus_terms=focus_terms,
+                preferred_domains=preferred_domains,
             )
 
             return sentinel
@@ -287,6 +290,7 @@ def test_runtime_applies_evidence_workload_budget_settings(
                 "max_total_chunks": 5,
                 "selection_mode": "focus",
                 "focus_terms": ("revenue", "2024"),
+                "preferred_domains": (),
             }
 
         finally:
@@ -500,5 +504,33 @@ def test_runtime_rejects_invalid_evidence_max_concurrency(
             match=("Enterprise Research evidence numeric settings are invalid"),
         ):
             await service.start(create_runtime_deps())
+
+    asyncio.run(run())
+
+
+def test_runtime_passes_explicit_financial_precision_preferences(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        _configure_evidence_backend(monkeypatch)
+        monkeypatch.setenv("ENTERPRISE_RESEARCH_EVIDENCE_SELECTION_MODE", "financial_precision")
+        monkeypatch.setenv("ENTERPRISE_RESEARCH_EVIDENCE_FOCUS_TERMS", "2024,revenue")
+        monkeypatch.setenv("ENTERPRISE_RESEARCH_EVIDENCE_PREFERRED_DOMAINS", "Microsoft.COM")
+        expected_class = plugin_module.EvidenceWorkloadSettings
+        captured = []
+
+        def capture(**kwargs):
+            settings = expected_class(**kwargs)
+            captured.append(settings)
+            return settings
+
+        monkeypatch.setattr(plugin_module, "EvidenceWorkloadSettings", capture)
+        service = EnterpriseResearchService()
+        await service.start(create_runtime_deps())
+        try:
+            assert len(captured) == 1
+            assert captured[0].selection_mode == "financial_precision"
+            assert captured[0].focus_terms == ("2024", "revenue")
+            assert captured[0].preferred_domains == ("microsoft.com",)
+        finally:
+            await service.stop()
 
     asyncio.run(run())

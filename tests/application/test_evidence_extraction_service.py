@@ -1003,3 +1003,86 @@ def test_all_three_chunk_completion_orders_produce_same_dedup_result() -> None:
 
     for order in permutations(range(3)):
         asyncio.run(run_once(order))
+
+
+def test_financial_precision_extracts_deep_original_quote_with_absolute_offsets() -> None:
+    async def run_test() -> None:
+        # The full page is persisted (not just a 12K prefix). Rank an intact
+        # later chunk without modifying its provenance or increasing LLM calls.
+        table = (
+            "INCOME STATEMENTS\n(In millions)\nYear Ended June 30 | 2024 | 2023 | 2022\n"
+            "Product | 64,773 | 64,699 | 72,732\n"
+            "Total revenue | 245,122 | 211,915 | 198,270\n"
+        )
+        exact_quote = table.strip()
+        full_text = "Management summary: 2024 revenue exceeds $245 billion.\n".ljust(13_000, ".") + table
+        setup = await setup_run(content=full_text)
+        extractor = StaticEvidenceExtractor(
+            lambda chunk: (
+                [EvidenceCandidate(content=exact_quote, relevance_score=0.99)] if exact_quote in chunk.content else []
+            )
+        )
+        service = build_service(
+            setup,
+            extractor,
+            chunk_size_chars=1000,
+            workload_settings=EvidenceWorkloadSettings(
+                max_documents=1,
+                max_chunks_per_document=1,
+                max_total_chunks=1,
+                selection_mode="financial_precision",
+                focus_terms=("2024", "revenue"),
+                preferred_domains=("example.com",),
+            ),
+        )
+        summary = await service.extract_run(setup.aggregate.task.task_id, setup.run.run_id)
+        assert (summary.scheduled_chunk_count, summary.verified_count, summary.created_count) == (1, 1, 1)
+        assert len(extractor.calls) == 1
+        assert extractor.calls[0].start_offset >= 13_000
+        aggregate = await setup.research_repository.get(setup.aggregate.task.task_id)
+        evidence = next(iter(aggregate.evidence.values()))
+        pos = full_text.index(exact_quote)
+        assert evidence.locator == f"chars:{pos}-{pos + len(exact_quote)}"
+        assert evidence.content == full_text[pos : pos + len(exact_quote)]
+        assert "(In millions)" in evidence.content
+        assert "2024 | 2023 | 2022" in evidence.content
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("truncated", [False, True])
+def test_financial_precision_rejects_missing_table_before_calling_model(truncated: bool) -> None:
+    async def run_test() -> None:
+        setup = await setup_run(content="2024 annual revenue was over $245 billion.")
+        if truncated:
+            document = RetrievedDocument.succeeded(
+                source_id=setup.source.source_id,
+                requested_url=str(setup.source.url),
+                final_url=str(setup.source.url),
+                content="2024 annual revenue was over $245 billion.",
+                metadata={"retrieval_truncated": True, "retrieval_original_content_chars": 350_000},
+            )
+            await setup.document_repository.save(document)
+        extractor = StaticEvidenceExtractor(lambda chunk: [EvidenceCandidate(content=chunk.content, relevance_score=1)])
+        service = build_service(
+            setup,
+            extractor,
+            workload_settings=EvidenceWorkloadSettings(
+                selection_mode="financial_precision",
+                focus_terms=("2024", "revenue"),
+                max_documents=1,
+                max_chunks_per_document=1,
+                max_total_chunks=1,
+            ),
+        )
+        with pytest.raises(
+            ResearchEvidenceExtractionError,
+            match=r"No same-chunk Total revenue table.*first column",
+        ) as exc:
+            await service.extract_run(setup.aggregate.task.task_id, setup.run.run_id)
+        assert ("truncated" in str(exc.value)) is truncated
+        assert extractor.calls == []
+        aggregate = await setup.research_repository.get(setup.aggregate.task.task_id)
+        assert aggregate.evidence == {}
+
+    asyncio.run(run_test())

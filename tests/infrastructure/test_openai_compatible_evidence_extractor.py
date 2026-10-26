@@ -175,6 +175,8 @@ def test_success_preserves_exact_excerpt_and_request_context() -> None:
 
         assert user_payload["chunk"]["content"] == chunk.content
 
+        assert "year/column header" in body["messages"][0]["content"]
+        assert "never stitch" in body["messages"][0]["content"].lower()
         assert body["temperature"] == 0.0
 
         assert body["stream"] is False

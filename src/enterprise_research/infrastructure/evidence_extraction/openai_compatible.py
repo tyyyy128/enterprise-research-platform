@@ -34,6 +34,11 @@ Do not paraphrase, summarize, fix grammar, or invent text.
 Select only excerpts that materially help answer the research objective or one
 of its research questions.
 
+For exact financial figures, prefer one contiguous verbatim span that includes
+both the year/column header, units (such as "In millions"), and the relevant
+numbered row. Never stitch separate passages or silently convert units.
+If the source chunk cannot support the specific requested figure, return [].
+
 Return exactly one JSON object with this shape:
 
 {

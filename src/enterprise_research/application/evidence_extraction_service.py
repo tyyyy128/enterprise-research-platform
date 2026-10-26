@@ -147,12 +147,27 @@ class ResearchEvidenceExtractionService:
                 continue
 
             chunks = chunk_document(document.content, self._chunking_settings)
-            document_chunks.append(EvidenceDocumentChunks(source_id=source.source_id, chunks=tuple(chunks)))
+            document_chunks.append(
+                EvidenceDocumentChunks(
+                    source_id=source.source_id,
+                    chunks=tuple(chunks),
+                    source_url=str(document.final_url) if document.final_url is not None else None,
+                    retrieval_truncated=document.metadata.get("retrieval_truncated") is True,
+                )
+            )
             if chunks and document.content_hash is not None:
                 eligible_document_hashes[source.source_id] = document.content_hash
 
         # Phase 2: enforce workload limits before making model calls.
         workload = plan_evidence_workload(document_chunks, self._workload_settings)
+        if self._workload_settings.selection_mode == "financial_precision" and workload.scheduled_chunk_count == 0:
+            truncated = any(doc.retrieval_truncated for doc in document_chunks)
+            detail = " At least one retrieved source was truncated." if truncated else ""
+            raise ResearchEvidenceExtractionError(
+                "No same-chunk Total revenue table with the requested fiscal year as its first column,"
+                " numeric amount, and unit was found."
+                + detail
+            )
         if workload.eligible_document_count == 0 or (
             self._manifest_repository is not None and workload.scheduled_chunk_count == 0
         ):

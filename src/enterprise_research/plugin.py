@@ -59,6 +59,8 @@ from enterprise_research.application.evidence_extraction_service import (
 from enterprise_research.application.evidence_workload import (
     EvidenceWorkloadSettings,
 )
+from enterprise_research.application.financial_evidence_scoring import target_financial_year
+from enterprise_research.application.financial_source_discovery import FinancialSourceDiscoverySettings
 from enterprise_research.application.graph_checkpoint import LangGraphCheckpointReader
 from enterprise_research.application.report_synthesis import ResearchReportSynthesisService
 from enterprise_research.application.report_writing import ResearchReportWritingService
@@ -309,12 +311,43 @@ class EnterpriseResearchService:
                     if not 1 <= max_results <= 20:
                         raise RuntimeError("ENTERPRISE_RESEARCH_SEARCH_MAX_RESULTS must be between 1 and 20.")
 
+                    financial_discovery = None
+                    if os.getenv("ENTERPRISE_RESEARCH_EVIDENCE_SELECTION_MODE", "uuid").strip().lower() == (
+                        "financial_precision"
+                    ):
+                        focus_terms = tuple(
+                            term.strip()
+                            for term in os.getenv("ENTERPRISE_RESEARCH_EVIDENCE_FOCUS_TERMS", "").split(",")
+                            if term.strip()
+                        )
+                        preferred_domains = tuple(
+                            domain.strip().lower()
+                            for domain in os.getenv("ENTERPRISE_RESEARCH_EVIDENCE_PREFERRED_DOMAINS", "").split(",")
+                            if domain.strip()
+                        )
+                        try:
+                            # Reuse the evidence selector's validation and opt-in vocabulary.
+                            EvidenceWorkloadSettings(
+                                selection_mode="financial_precision",
+                                focus_terms=focus_terms,
+                                preferred_domains=preferred_domains,
+                            )
+                            year = target_financial_year(focus_terms)
+                            assert year is not None
+                            financial_discovery = FinancialSourceDiscoverySettings(
+                                target_year=year,
+                                preferred_domains=preferred_domains,
+                            )
+                        except ValueError as exc:
+                            raise RuntimeError("Financial source discovery settings are invalid.") from exc
+
                     search_service = ResearchSearchService(
                         research_repository,
                         run_repository,
                         plan_repository,
                         TavilySearchProvider(TavilySearchSettings(api_key=_required_env("TAVILY_API_KEY"))),
                         max_results_per_question=(max_results),
+                        financial_discovery=financial_discovery,
                     )
 
                 else:
@@ -496,12 +529,21 @@ class EnterpriseResearchService:
                             ).split(",")
                             if term.strip()
                         )
+                        evidence_preferred_domains = tuple(
+                            domain.strip().lower()
+                            for domain in os.getenv(
+                                "ENTERPRISE_RESEARCH_EVIDENCE_PREFERRED_DOMAINS",
+                                "",
+                            ).split(",")
+                            if domain.strip()
+                        )
                         evidence_workload_settings = EvidenceWorkloadSettings(
                             max_documents=evidence_max_documents,
                             max_chunks_per_document=evidence_max_chunks_per_document,
                             max_total_chunks=evidence_max_total_chunks,
                             selection_mode=evidence_selection_mode,
                             focus_terms=evidence_focus_terms,
+                            preferred_domains=evidence_preferred_domains,
                         )
 
                     except ValueError as exc:
