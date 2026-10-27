@@ -73,12 +73,7 @@ The local baseline reported during development was **664 passed, 63 skipped**. M
 
 Never commit `.env` files, API credentials, database dumps, historical private research data, provider response bodies, or private key material. Review [`SECURITY.md`](SECURITY.md) before publishing.
 
-## Roadmap
 
-1. Verify historical real search-result candidates (3J-2C).
-2. Complete an eligible original-source end-to-end positive case (3J-2D).
-3. Improve isolated PostgreSQL integration checks and clean-clone CI.
-4. Run a separately approved, budget-limited live-provider acceptance test.
 
 ## Attribution and license
 
